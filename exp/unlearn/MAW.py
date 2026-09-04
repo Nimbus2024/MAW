@@ -29,6 +29,7 @@ from tqdm import tqdm
 import ast
 
 # Local imports (v3/unlearn/)
+from .. import _paths
 from .unlearn_dataset import (
     Muitimodal_Dataset,
     Unimodal_Dataset,
@@ -51,7 +52,7 @@ def load_idk(path="idk.txt"):
 
 def load_model_and_processor(args):
     """加载 π_θ (SFT + LoRA) 和 π_ref (冻结 SFT)"""
-    if args.model_id.startswith("llava"):
+    if _paths.is_llava(args.model_id):
         print("Loading LLAVA policy model (π_θ)...")
         load_kwargs = dict(torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
                            local_files_only=True)
@@ -537,7 +538,7 @@ def main(args):
         # Keep an adapter checkpoint after every epoch for rollback/evaluation.
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
-            epoch_dir = os.path.join(args.epoch_dir, f"epoch-{epoch + 1}")
+            epoch_dir = os.path.join(args.epoch_dir, f"epoch-{epoch + 1}", "model")
             os.makedirs(epoch_dir, exist_ok=True)
             accelerator.unwrap_model(model).save_pretrained(epoch_dir)
             print(f"Saved LoRA checkpoint: {epoch_dir}")
@@ -550,7 +551,7 @@ def main(args):
     # ── Point adapters/final at the last per-epoch adapter ──
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        final_epoch_dir = os.path.join(args.epoch_dir, f"epoch-{epoch + 1}")
+        final_epoch_dir = os.path.join(args.epoch_dir, f"epoch-{epoch + 1}", "model")
         with open(os.path.join(final_epoch_dir, "base_model.json"), "w") as f:
             json.dump({"base_model": args.vanilla_dir, "method": "MAW"}, f)
         if os.path.lexists(args.save_dir):
@@ -586,16 +587,16 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MAW: ModalityAwareMix - Dynamic-γ DPO Unlearning Loss")
-    parser.add_argument("--model_id", type=str, default='llava-hf/llava-1.5-7b-hf')
-    parser.add_argument("--processor_dir", type=str, default=None,
-                        help="Directory for processor/tokenizer (default: model_id cache)")
-    parser.add_argument("--vanilla_dir", type=str, required=True,
-                        help="SFT model path (also used as π_ref)")
+    parser.add_argument("--model_id", type=str, default=_paths.VANILLA)
+    parser.add_argument("--processor_dir", type=str, default=_paths.ORIGIN,
+                        help="Directory for processor/tokenizer (default: origin)")
+    parser.add_argument("--vanilla_dir", type=str, default=_paths.ORIGIN,
+                        help="SFT/origin model path (also used as π_ref)")
     parser.add_argument("--save_dir", type=str, default=None,
-                        help="Final adapter dir (default: <run_dir>/adapters/final)")
+                        help="Final adapter dir (default: <run_dir>/model)")
     parser.add_argument("--run_dir", type=str, default=None,
-                        help="Unified run dir (default: results/MAW/runs/<timestamp>)")
-    parser.add_argument("--data_split_dir", type=str, required=True,
+                        help="Unified run dir (default: results/MAW/<timestamp>)")
+    parser.add_argument("--data_split_dir", type=str, default=_paths.UMU_BENCH,
                         help="Root directory of forget/retain data splits")
     parser.add_argument("--forget_split_ratio", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=4,
@@ -632,15 +633,15 @@ if __name__ == "__main__":
     if args.gamma_min > args.gamma_max:
         parser.error("--gamma_min must not exceed --gamma_max")
 
-    # ── Structured run directory ──
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    run_dir = args.run_dir or os.path.join("results", "MAW", "runs", timestamp)
+    # ── Structured run directory (AGENTS: results/<label>/<timestamp>/) ──
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    run_dir = args.run_dir or os.path.join("results", "MAW", timestamp)
     config_dir = os.path.join(run_dir, "config")
-    adapter_dir = os.path.join(run_dir, "adapters")
-    save_dir = args.save_dir or os.path.join(adapter_dir, "final")
-    epoch_dir = os.path.join(adapter_dir, "epochs")
+    runs_dir = os.path.join(run_dir, "runs")
+    save_dir = args.save_dir or os.path.join(run_dir, "model")
+    epoch_dir = runs_dir
     tb_dir = os.path.join(run_dir, "logs", "tensorboard")
-    for directory in (config_dir, os.path.dirname(save_dir), epoch_dir, tb_dir):
+    for directory in (config_dir, runs_dir, tb_dir):
         os.makedirs(directory, exist_ok=True)
 
     print(f"Run dir: {run_dir}")

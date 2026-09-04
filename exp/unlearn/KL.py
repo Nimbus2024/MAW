@@ -21,6 +21,7 @@ from transformers import BitsAndBytesConfig, LlavaForConditionalGeneration, Auto
     LlavaNextForConditionalGeneration, LlavaNextProcessor, Idefics2ForConditionalGeneration, AutoTokenizer
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 import json
+from .. import _paths
 from .unlearn_dataset import Muitimodal_Dataset,Unimodal_Dataset,train_collate_fn_llava_multimodal,train_collate_fn_llava_unimodal
 from PIL import Image
 from accelerate import Accelerator
@@ -52,7 +53,7 @@ def load_model_and_processor(args):
     Load the model and processor based on the provided model_id.
     Different models may require different loading methods, which are handled with conditional statements.
     """
-    if args.model_id.startswith("llava"):
+    if _paths.is_llava(args.model_id):
         # Load LLAVA model and processor
         print("Loading LLAVA model...")
         load_kwargs = dict(torch_dtype=torch.bfloat16, local_files_only=True)
@@ -76,7 +77,7 @@ def load_model_and_processor(args):
     return model, processor
 
 def invoke(batch,model,model_id,mode):
-    if model_id.startswith("llava"):
+    if _paths.is_llava(model_id):
         if mode == 'multimodal':
             input_ids, attention_mask, pixel_values, labels = batch
             outputs = model(
@@ -129,7 +130,7 @@ def main(args):
     # Load model and processor
 
     model, processor = load_model_and_processor(args)
-    if args.model_id.startswith("llava"):
+    if _paths.is_llava(args.model_id):
         # Load LLAVA model and processor
         print("Loading Oracle LLAVA model...")
         oracle_kwargs = dict(torch_dtype=torch.bfloat16, local_files_only=True)
@@ -190,7 +191,7 @@ def main(args):
     unimodel_dataset_retain = Unimodal_Dataset(df=df_retain,mode=f"retain_{100-args.forget_split_ratio}")
 
 
-    if args.model_id.startswith("llava"):
+    if _paths.is_llava(args.model_id):
         train_dataloader_multimodal_forget = DataLoader(
             multimodel_dataset_forget,
             batch_size=args.batch_size,
@@ -238,15 +239,17 @@ def main(args):
         model, optimizer, train_dataloader_multimodal_forget,train_dataloader_unimodal_forget,train_dataloader_multimodal_retain,train_dataloader_unimodal_retain, lr_scheduler
     )
 
-    # Unified run directory: results/KL/<timestamp>/ containing tensorboard,
-    # saved model (model/), train log, eval log, eval results and args.
+    # Unified run directory: results/<label>/<timestamp>/ containing
+    # logs/tensorboard, model/, config/args.json (eval metrics under runs/).
     run_dir = args.run_dir or os.path.join(
-        "results", "KL",
-        time.strftime("%Y%m%d-%H%M%S"))
+        "results", "KLmin",
+        time.strftime("%Y%m%d_%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     save_dir = args.save_dir or os.path.join(run_dir, "model")
-    tb_dir = os.path.join(run_dir, "tensorboard")
+    tb_dir = os.path.join(run_dir, "logs", "tensorboard")
+    config_dir = os.path.join(run_dir, "config")
     os.makedirs(tb_dir, exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
     writer = SummaryWriter(log_dir=tb_dir)
     print(f"Run dir: {run_dir}")
     print(f"Model save dir: {save_dir}")
@@ -254,9 +257,9 @@ def main(args):
     args.save_dir = save_dir
     # Save training hyperparameters for run comparison
     if accelerator.is_main_process:
-        with open(os.path.join(run_dir, "args.json"), "w") as f:
+        with open(os.path.join(config_dir, "args.json"), "w") as f:
             json.dump(vars(args), f, indent=2, default=str)
-    print(f"Hyperparameters saved to: {run_dir}/args.json")
+    print(f"Hyperparameters saved to: {config_dir}/args.json")
 
     global_step = 0
     for epoch in range(args.num_epochs):
@@ -337,14 +340,14 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-tune different models")
     
-    parser.add_argument("--model_id", type=str, default='llava-hf/llava-1.5-7b-hf', help="Pretrained model ID")
-    parser.add_argument("--vanilla_dir", type=str, required=True, help="Model path")
-    parser.add_argument("--oracle_model_id", type=str, required=True, help="Oracle model ID")
+    parser.add_argument("--model_id", type=str, default=_paths.VANILLA, help="模型族标识(可本地路径或 repo id)，权重取 --vanilla_dir")
+    parser.add_argument("--vanilla_dir", type=str, default=_paths.ORIGIN, help="遗忘起点模型(origin/SFT), 本地路径")
+    parser.add_argument("--oracle_model_id", type=str, default=_paths.ORIGIN, help="Oracle(reference/SFT) 模型本地路径")
     parser.add_argument("--save_dir", type=str, default=None,
                         help="Directory to save the model; defaults to <run_dir>/model")
     parser.add_argument("--run_dir", type=str, default=None,
                         help="Unified run dir; defaults to results/KL/<timestamp> (contains tensorboard/, model/, train.log, eval results)")
-    parser.add_argument("--data_split_dir", type=str, required=True, help="Directory of the test dataset")
+    parser.add_argument("--data_split_dir", type=str, default=_paths.UMU_BENCH, help="Directory of the test dataset")
     parser.add_argument("--forget_split_ratio", type=int, default=5, help="forget ratio")
     parser.add_argument("--batch_size", type=int, default=6, help="Batch size for training")
     parser.add_argument("--alpha", type=float, default=1.0, help="alpha")

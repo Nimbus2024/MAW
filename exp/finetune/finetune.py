@@ -19,6 +19,7 @@ from .ft_dataset import (
     Muitimodal_Dataset, Unimodal_Dataset,
     train_collate_fn_llava_muitimodal, train_collate_fn_llava_unimodal
 )
+from .. import _paths
 import matplotlib.pyplot as plt
 from accelerate import Accelerator
 from transformers import Trainer, TrainingArguments
@@ -45,7 +46,7 @@ def find_all_linear_names(model):
 # Load model and processor based on the specified model ID
 
 def load_model_and_processor(model_id):
-    if model_id.startswith("llava"):
+    if _paths.is_llava(model_id):
         print("Loading LLAVA model...")
         model = LlavaForConditionalGeneration.from_pretrained(
             model_id,
@@ -102,7 +103,7 @@ def main(args):
     unimodel_dataset = Unimodal_Dataset(df=df)
 
     # Build dataloaders for multimodal and unimodal training
-    if args.model_id.startswith("llava"):
+    if _paths.is_llava(args.model_id):
         train_dataloader_multimodal = DataLoader(
             multimodel_dataset,
             batch_size=args.batch_size,
@@ -181,7 +182,7 @@ def main(args):
 if __name__ == "__main__":
     # Argument parser for configurable options
     parser = argparse.ArgumentParser(description="Fine-tune different models")
-    parser.add_argument("--model_id", type=str, default="llava-hf/llava-1.5-7b-hf", help="Pretrained model ID")
+    parser.add_argument("--model_id", type=str, default=_paths.VANILLA, help="Pretrained model ID or local path")
     parser.add_argument("--save_dir", type=str, required=True, help="Directory to save the model")
     parser.add_argument("--data_dir", type=str, required=True, help="Directory for the dataset")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")

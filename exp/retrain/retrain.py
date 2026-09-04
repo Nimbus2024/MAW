@@ -15,6 +15,7 @@ from peft import LoraConfig, get_peft_model
 from accelerate import Accelerator
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from .. import _paths
 from ..unlearn.unlearn_dataset import Muitimodal_Dataset, train_collate_fn_llava_multimodal
 
 def find_all_linear_names(model):
@@ -37,13 +38,15 @@ def main(args):
     torch.manual_seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
-    run_dir = args.run_dir or os.path.join("results", "retrain", time.strftime("%Y%m%d-%H%M%S"))
+    run_dir = args.run_dir or os.path.join("results", "retrain", time.strftime("%Y%m%d_%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     save_dir = os.path.join(run_dir, "model")
-    tb_dir = os.path.join(run_dir, "tensorboard")
+    tb_dir = os.path.join(run_dir, "logs", "tensorboard")
+    config_dir = os.path.join(run_dir, "config")
     os.makedirs(tb_dir, exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
     os.makedirs(save_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "args.json"), "w") as f:
+    with open(os.path.join(config_dir, "args.json"), "w") as f:
         json.dump(vars(args), f, indent=2, default=str)
     print(f"Run dir: {run_dir}")
 
@@ -105,8 +108,8 @@ def main(args):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base_model", default="llava-hf/llava-1.5-7b-hf")
-    ap.add_argument("--processor", default="llava-hf/llava-1.5-7b-hf")
+    ap.add_argument("--base_model", default=_paths.VANILLA)
+    ap.add_argument("--processor", default=_paths.VANILLA)
     ap.add_argument("--data_dir", required=True, help="retain parquet 路径")
     ap.add_argument("--run_dir", default=None)
     ap.add_argument("--batch_size", type=int, default=6)
