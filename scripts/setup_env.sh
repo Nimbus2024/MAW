@@ -254,7 +254,6 @@ cat <<EOF
   数据: ${DATA_DIR}/${DATA_NAME}
   日志: ${LOG_FILE}
 =======================================================
-注意: 实验代码目前仍按 repo_id + local_files_only(命中 HF 缓存)加载。
-让代码改从 ${DEP_ROOT} 本地路径加载(角色 vanilla/origin)属于 Phase B 接线工作,
-本脚本只负责下载落盘, 下载完成后勿直接跑实验。
+注意: 实验代码已接线为从 ${DEP_ROOT} 本地路径加载(角色 vanilla/origin)。
+安装与 GPU 匹配的 torch 后, 即可用 run_unlearn.sh / run_eval.sh 跑实验。
 EOF
