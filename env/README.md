@@ -35,8 +35,10 @@ cd code
 常用选项（全部见 `--help`）：
 
 ```bash
-./scripts/setup_env.sh --all                          # 默认 + vLLM
+./scripts/setup_env.sh --all                          # 默认 + vLLM（vllm 为最新版）
 ./scripts/setup_env.sh --pip --torch cu128            # 按 cu128 装 torch 再装依赖
+# 已知 GPU 的 CUDA 版本时，一次装好匹配的 torch + vllm + 依赖 + 下载：
+./scripts/setup_env.sh --pip --torch cu128 --vllm 0.11.0 --models --data --yes
 ./scripts/setup_env.sh --models --data                # 只下模型/数据集（重下加 --force）
 ./scripts/setup_env.sh --pip-index huawei             # pip 源预设: ustc|aliyun|huawei|tuna|pypi 或完整 URL
 ./scripts/setup_env.sh --verify                       # 对已下载模型做 transformers 加载验证

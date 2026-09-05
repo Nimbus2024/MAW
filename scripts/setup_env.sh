@@ -64,6 +64,8 @@ setup_env.sh — 新服务器一键环境配置
   ./scripts/setup_env.sh                              # 默认: pip + models + data
   ./scripts/setup_env.sh --all                        # 再加 vLLM
   ./scripts/setup_env.sh --pip-index ustc --yes       # 设 pip 源(预设或URL)后执行默认步骤
+  ./scripts/setup_env.sh --pip --torch cu128 --vllm 0.11.0 --models --data --yes
+                                                    # 已知CUDA: 一次装好匹配 torch + vllm + 依赖 + 下载
   ./scripts/setup_env.sh --pip --torch cu128 --models --data
   ./scripts/setup_env.sh --verify                     # 只对已下载模型做加载验证(需已装 torch)
   ./scripts/setup_env.sh --dry-run                    # 只打印执行计划
