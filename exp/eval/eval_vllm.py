@@ -330,11 +330,12 @@ def row_image(row, mode):
 def classification_jobs(path, mode, forget_file, args):
     jobs = []
     skipped = {"Image_Textual": 0, "Pure_Text": 0}
-    for _, row in evaluation_rows(path, mode, forget_file, args).iterrows():
+    for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
         image = row_image(row, mode)
         groups = row["Classification_Task"]
         for group_name in ("Image_Textual_Questions", "Pure_Text_Questions"):
             question_type = "Image_Textual" if group_name.startswith("Image") else "Pure_Text"
+            qid = 0
             for item in questions(groups.get(group_name, []), args):
                 try:
                     options, correct = benchmark.classification_answers(
@@ -347,9 +348,36 @@ def classification_jobs(path, mode, forget_file, args):
                 jobs.append(Job(
                     question=f"{item['Question']}\nSelect answer in {options}",
                     image=image if question_type == "Image_Textual" else None,
-                    metadata={"type": question_type, "correct": correct},
+                    metadata={"type": question_type, "correct": correct,
+                              "row": row_idx, "qid": qid},
                 ))
+                qid += 1
     return jobs, skipped
+
+
+def _paired_correct(jobs, answers, ok_fn):
+    """按 (row, type, qid) 对齐 IT/PT 逐题正确性, 返回配对的 (it_ok, pt_ok) 列表。"""
+    rows = {}
+    for job, ans in zip(jobs, answers):
+        md = job.metadata
+        rows.setdefault(md["row"], {}).setdefault(md["type"], {})[md["qid"]] = ok_fn(job, ans)
+    pairs = []
+    for kinds in rows.values():
+        it = kinds.get("Image_Textual", {})
+        pt = kinds.get("Pure_Text", {})
+        for q in sorted(set(it) & set(pt)):
+            pairs.append((it[q], pt[q]))
+    return pairs
+
+
+def _all_acc_err(pairs):
+    """All Accuracy = 两模态都对; All Error = 两模态都错(与 eval.py 语义一致)。"""
+    n = len(pairs)
+    if not n:
+        return None, None
+    both = sum(1 for a, b in pairs if a and b)
+    neither = sum(1 for a, b in pairs if not a and not b)
+    return 100.0 * both / n, 100.0 * neither / n
 
 
 def evaluate_classification(backend, path, mode, forget_file, args):
@@ -361,18 +389,27 @@ def evaluate_classification(backend, path, mode, forget_file, args):
         kind = job.metadata["type"]
         totals[kind] += 1
         correct[kind] += int(benchmark.answer_contains_correct_option(answer, job.metadata["correct"]))
-    return {
+    result = {
         "Image-Textual Question Accuracy": 100 * correct["Image_Textual"] / totals["Image_Textual"] if totals["Image_Textual"] else 0,
         "Pure Text Question Accuracy": 100 * correct["Pure_Text"] / totals["Pure_Text"] if totals["Pure_Text"] else 0,
         "Skipped Invalid Image-Textual Questions": skipped["Image_Textual"],
         "Skipped Invalid Pure Text Questions": skipped["Pure_Text"],
     }
+    pairs = _paired_correct(
+        jobs, answers,
+        lambda job, ans: benchmark.answer_contains_correct_option(ans, job.metadata["correct"]))
+    all_acc, all_err = _all_acc_err(pairs)
+    if all_acc is not None:
+        result["All Modal Question Accuracy"] = all_acc
+        result["All Modal Question Error"] = all_err
+    return result
 
 
 def fill_jobs(path, mode, forget_file, args):
     jobs = []
-    for _, row in evaluation_rows(path, mode, forget_file, args).iterrows():
+    for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
         image = row_image(row, mode)
+        per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Mask_Task"], args):
             kind = item["Type"]
             prompt = item["Question"].replace("__", "[Blank]")
@@ -380,8 +417,10 @@ def fill_jobs(path, mode, forget_file, args):
             jobs.append(Job(
                 question=prompt,
                 image=image if kind == "Image_Textual" else None,
-                metadata={"type": kind, "ground_truth": item["Ground_Truth"]},
+                metadata={"type": kind, "ground_truth": item["Ground_Truth"],
+                          "row": row_idx, "qid": per_kind[kind]},
             ))
+            per_kind[kind] += 1
     return jobs
 
 
@@ -394,16 +433,25 @@ def evaluate_fill(backend, path, mode, forget_file, args):
         kind = job.metadata["type"]
         totals[kind] += 1
         correct[kind] += int(str(job.metadata["ground_truth"]).casefold() in answer.casefold())
-    return {
+    result = {
         "image_textual_accuracy": 100 * correct["Image_Textual"] / totals["Image_Textual"] if totals["Image_Textual"] else 0,
         "pure_text_accuracy": 100 * correct["Pure_Text"] / totals["Pure_Text"] if totals["Pure_Text"] else 0,
     }
+    pairs = _paired_correct(
+        jobs, answers,
+        lambda job, ans: str(job.metadata["ground_truth"]).casefold() in ans.casefold())
+    all_acc, all_err = _all_acc_err(pairs)
+    if all_acc is not None:
+        result["All Modal Question Accuracy"] = all_acc
+        result["All Modal Question Error"] = all_err
+    return result
 
 
 def generation_jobs(path, mode, forget_file, args):
     jobs = []
-    for _, row in evaluation_rows(path, mode, forget_file, args).iterrows():
+    for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
         image = row_image(row, mode)
+        per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Generation_Task"], args):
             kind = item["Type"]
             prompt = item["Question"]
@@ -414,10 +462,13 @@ def generation_jobs(path, mode, forget_file, args):
                 metadata={
                     "image_id": row["ID"],
                     "type": kind,
+                    "row": row_idx,
+                    "qid": per_kind[kind],
                     "question": item["Question"],
                     "ground_truth": item["Ground_Truth"],
                 },
             ))
+            per_kind[kind] += 1
     return jobs
 
 
@@ -428,11 +479,14 @@ def evaluate_generation(backend, path, mode, forget_file, args):
     metric_names = ("rouge1", "rouge2", "rougeL", "bleu")
     sums = {kind: {name: 0.0 for name in metric_names} for kind in ("Image_Textual", "Pure_Text")}
     counts = {"Image_Textual": 0, "Pure_Text": 0}
+    rows_rouge = {}
     details = {"Generation_Questions": []}
     for job, answer in zip(jobs, answers):
         kind = job.metadata["type"]
         truth = str(job.metadata["ground_truth"])
         scores = scorer.score(truth, answer)
+        rows_rouge.setdefault(job.metadata["row"], {}).setdefault(kind, {})[job.metadata["qid"]] = \
+            scores["rougeL"].fmeasure
         sums[kind]["rouge1"] += scores["rouge1"].fmeasure
         sums[kind]["rouge2"] += scores["rouge2"].fmeasure
         sums[kind]["rougeL"] += scores["rougeL"].fmeasure
@@ -461,6 +515,20 @@ def evaluate_generation(backend, path, mode, forget_file, args):
             f"Average ROUGE-L ({label})": sums[kind]["rougeL"] / counts[kind],
             f"Average BLEU ({label})": sums[kind]["bleu"] / counts[kind],
         })
+
+    pairs = []
+    for kinds in rows_rouge.values():
+        it = kinds.get("Image_Textual", {})
+        pt = kinds.get("Pure_Text", {})
+        for q in sorted(set(it) & set(pt)):
+            pairs.append((it[q], pt[q]))
+    h_vals = []
+    for a, b in pairs:
+        if a + b <= 0:
+            continue
+        h = (a * a + b * b) / (a + b) if mode == "forget" else 2 * a * b / (a + b)
+        h_vals.append(h)
+    result["All Modal Average ROUGE-L"] = sum(h_vals) / len(h_vals) if h_vals else 0.0
     return result
 
 

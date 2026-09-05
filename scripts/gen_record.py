@@ -32,29 +32,54 @@ def find_json_key(obj, *needles):
     return None
 
 
-def task_metric(scope, task, mode):
-    """从单个 scope dict 提取 {IT,PT} 数值; 无则空串。mode IT/PT/ALL。"""
-    td = scope.get(task) if isinstance(scope, dict) else None
-    if not isinstance(td, dict):
-        return ""
-    if task == "fill_in_the_blank":
-        it = td.get("image_textual_accuracy")
-        pt = td.get("pure_text_accuracy")
-    elif task == "classification":
-        it = find_json_key(td, "image-textual question accuracy")
-        pt = find_json_key(td, "pure text question accuracy")
-    else:  # generation: use ROUGE-L (fallback ROUGE-1)
-        it = find_json_key(td, "average rouge-l", "(image_textual)")
-        pt = find_json_key(td, "average rouge-l", "(pure_text)")
-        if it is None:
-            it = find_json_key(td, "average rouge-1", "(image_textual)")
-        if pt is None:
-            pt = find_json_key(td, "average rouge-1", "(pure_text)")
+def _task_vals(data, group, task):
+    """返回 (IT, PT, All)。All 公式与参考 gen_latex._all_metric 一致:
+    forget = (it+pt+(100-err))/3; retain = (it+pt+acc_all)/3; real = acc_all;
+    gen 的 All 直接读后端的 All Modal Average ROUGE-L。"""
+    if not data:
+        return None, None, None
+    dk = {"Forget": "forget", "Retain": "retain", "Real": "real"}[group]
+    scope = None
+    for gkey in GROUP_KEYS[group]:
+        s = data.get(gkey)
+        if isinstance(s, dict):
+            scope = s
+            break
+    t = scope.get(TASK_KEYS[task]) if isinstance(scope, dict) else None
+    if not isinstance(t, dict):
+        return None, None, None
+    if task == "Fill":
+        it = t.get("image_textual_accuracy")
+        pt = t.get("pure_text_accuracy")
+    elif task == "Classif":
+        it = t.get("Image-Textual Question Accuracy")
+        pt = t.get("Pure Text Question Accuracy")
+    else:
+        return (t.get("Average ROUGE-L (Image_Textual)"),
+                t.get("Average ROUGE-L (Pure_Text)"),
+                t.get("All Modal Average ROUGE-L"))
     if it is None or pt is None:
+        return it, pt, None
+    acc_all = t.get("All Modal Question Accuracy")
+    err = t.get("All Modal Question Error")
+    if dk == "real":
+        all_v = acc_all
+    elif dk == "forget" and err is not None:
+        all_v = (it + pt + (100.0 - err)) / 3.0
+    elif dk == "retain" and acc_all is not None:
+        all_v = (it + pt + acc_all) / 3.0
+    else:
+        all_v = None
+    return it, pt, all_v
+
+
+def scope_cell(data, group, task, modal):
+    it, pt, all_v = _task_vals(data, group, task)
+    value = {"IT": it, "PT": pt, "All": all_v}[modal]
+    if value is None:
         return ""
-    if mode == "ALL":
-        return fmt((it + pt) / 2.0)
-    return fmt(it if mode == "IT" else pt)
+    pattern = "%.1f" if task != "Gen" else "%.3f"
+    return pattern % value
 
 
 def fmt(x):
@@ -83,16 +108,6 @@ def parse_final(metrics_dir):
         return json.load(open(files[0]))
     except Exception:
         return None
-
-
-def scope_metric(run_data, group, task, mode):
-    if not run_data:
-        return ""
-    for gkey in GROUP_KEYS[group]:
-        scope = run_data.get(gkey)
-        if isinstance(scope, dict):
-            return task_metric(scope, TASK_KEYS[task], mode)
-    return ""
 
 
 def collect_runs(label_dir):
@@ -164,7 +179,7 @@ def agg_cells(run_entry):
     cells = []
     for group in ("Forget", "Retain", "Real"):
         for task in ("Fill", "Classif", "Gen"):
-            cells.append(scope_metric(data, group, task, "ALL"))
+            cells.append(scope_cell(data, group, task, "All"))
     return " & ".join(cells)
 
 
@@ -173,8 +188,8 @@ def pm_cells(run_entry):
     cells = []
     for group in ("Forget", "Retain", "Real"):
         for task in ("Fill", "Classif", "Gen"):
-            for mode in ("IT", "PT"):
-                cells.append(scope_metric(data, group, task, mode))
+            for modal in ("IT", "PT"):
+                cells.append(scope_cell(data, group, task, modal))
     return " & ".join(cells)
 
 
