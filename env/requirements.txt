@@ -1,12 +1,11 @@
-# UMU-Bench 核心依赖
-# 注意: torch 版本由服务器 GPU/CUDA 决定(如 AutoDL RTX 5090 需 torch>=2.4 cu128),
-# 不在本文件锁定; 建议在环境里单独装匹配的 torch。
+# torch/torchvision 版本由服务器 GPU/CUDA 决定(如 A800 cu126/cu128), 不在此锁定;
+# 建议用 setup_env.sh --torch cuXXX 单独装。其余核心库锁到参考生产(A100/opsd)实测版本。
 torch
 torchvision
-transformers
-accelerate
-peft
-datasets
+transformers==4.57.1
+accelerate==1.11.0
+peft==0.17.1
+datasets==5.0.1
 bitsandbytes
 pandas
 pyarrow
