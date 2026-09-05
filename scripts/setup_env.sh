@@ -332,6 +332,7 @@ echo "== 日志: ${LOG_FILE} =="
 
 ensure_env
 write_pip_config
+ensure_hf_cli
 
 if [[ "$DO_PIP" == 1 ]]; then    step_pip; fi
 if [[ "$DO_MODELS" == 1 ]]; then step_models; fi
