@@ -237,6 +237,7 @@ def main():
 
     doc = [
         "\\documentclass{article}",
+        "\\usepackage[UTF8]{ctex}",   # 中文(标题/说明), 建议 xelatex 编译
         "\\usepackage{booktabs}", "\\usepackage{tabularx}",
         "\\usepackage{multirow}", "\\usepackage{graphicx}",
         "\\usepackage{float}", "\\usepackage[margin=1in]{geometry}",
