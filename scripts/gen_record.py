@@ -67,6 +67,14 @@ def fmt(x):
     return f"{x:.1f}"
 
 
+def esc(s):
+    """LaTeX 转义: 时间戳/路径里的 _、#、% 等在文本模式需转义。"""
+    return (str(s).replace("\\", r"\textbackslash{}")
+            .replace("{", r"\{").replace("}", r"\}")
+            .replace("_", r"\_").replace("&", r"\&")
+            .replace("%", r"\%").replace("#", r"\#").replace("$", r"\$"))
+
+
 def parse_final(metrics_dir):
     files = glob.glob(os.path.join(metrics_dir, "*final_evaluation_results.json"))
     if not files:
@@ -178,7 +186,7 @@ def metric_table(run_rows, header, cells_fn, ncols):
     ]
     for run in run_rows:
         name = run[0]
-        lines.append(f"\\textbf{{{name}}} & {cells_fn(run)} \\\\")
+        lines.append(f"\\textbf{{{esc(name)}}} & {cells_fn(run)} \\\\")
     lines += ["\\bottomrule", "\\end{tabular}", "}", "\\end{table}"]
     return "\n".join(lines)
 
@@ -198,11 +206,11 @@ def hyper_table(entries):
     body = []
     for e in entries:
         cfg = e[2]
-        row = [f"\\textbf{{{e[0]}}}"]
+        row = [f"\\textbf{{{esc(e[0])}}}"]
         for k in cols:
-            row.append(str(cfg.get(k, "")))
+            row.append(esc(cfg.get(k, "")))
         body.append(" & ".join(row) + " \\\\")
-    head = "Run & " + " & ".join(cols) + " \\\\"
+    head = "Run & " + " & ".join(esc(c) for c in cols) + " \\\\"
     ncols = len(cols) + 1
     return (f"\\begin{{table}}[H]\n\\centering\n\\resizebox{{\\linewidth}}{{!}}{{%\n"
             f"\\begin{{tabular}}{{l{'c'*(ncols-1)}}}\n\\toprule\n{head}\n\\midrule\n"
