@@ -25,6 +25,7 @@ DATA_DIR="${DATA_DIR:-${DEP_ROOT}/data}"
 ENV_NAME="${ENV_NAME:-maw}"          # conda 环境名
 ENV_PY="${ENV_PY:-3.10}"             # python 版本
 PIP_INDEX="${PIP_INDEX:-}"           # pip 镜像(预设或完整 URL), 空 = 不动 pip 配置
+CONDA_CHANNEL="${CONDA_CHANNEL:-defaults}"   # conda channel(镜像如 https://mirrors.ustc.edu.cn/anaconda/pkgs/main)
 
 # HF 镜像与传输开关
 HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
@@ -110,8 +111,10 @@ ensure_env() {
   resolve_conda
   if [[ ! -d "$ENV_DIR" ]]; then
     echo "== 创建 conda 环境 ${ENV_NAME} (python=${ENV_PY}) =="
-    # --override-channels -c defaults: 避免自定义 channel(可能不可达/403) 导致失败
-    "$CONDA" create -y -n "$ENV_NAME" "python=${ENV_PY}" --override-channels -c defaults -q
+    # --override-channels: 避免用户自定义 channel(可能不可达/403)导致失败;
+    # 国内默认源慢时用 CONDA_CHANNEL 切镜像(如 ustc/tuna 的 anaconda pkgs/main)
+    "$CONDA" create -y -n "$ENV_NAME" "python=${ENV_PY}" \
+      --override-channels -c "${CONDA_CHANNEL}" -q
   else
     echo "== conda 环境已存在: ${ENV_NAME} =="
   fi
