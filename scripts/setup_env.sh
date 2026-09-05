@@ -50,8 +50,13 @@ VLLM_VERSION="${VLLM_VERSION:-}"                            # 空 = 最新稳定
 DO_PIP=0 DO_MODELS=0 DO_DATA=0 DO_VLLM=0 DO_VERIFY=0
 SPECIFIED=0
 FORCE=0 DRY_RUN=0 YES=0
-TORCH_INDEX=""
+TORCH_CU=""
 TS="$(date +%Y%m%d_%H%M%S)"
+
+# PyPI 默认构建即对应 CUDA(实测 cu128→torch 2.8.0+cu128), 从当前 pip 镜像安装以避开
+# download.pytorch.org(国内常被墙)。cu126→2.7.1/cu121→2.4.1/cu118→2.1.2 同理。
+declare -A TORCH_PIN=( [cu118]="2.1.2" [cu121]="2.4.1" [cu126]="2.7.1" [cu128]="2.8.0" )
+declare -A TVISION_PIN=( [cu118]="0.16.2" [cu121]="0.19.1" [cu126]="0.22.1" [cu128]="0.23.0" )
 
 usage() {
   cat <<'EOF'
@@ -72,10 +77,11 @@ setup_env.sh — 新服务器一键环境配置
 
 选项:
   --pip            安装依赖 (pip install -r env/requirements.txt)
-  --torch [cu]     装匹配 torch/torchvision (cu118|cu121|cu126|cu128|auto; 跳过则检测已装)
+  --torch [cu]     torch/torchvision: cu118|cu121|cu126|cu128 指定, auto 由驱动推断;
+                   有卡且未装 torch 时自动(auto); 无卡需显式给 cuXXX
   --models         下载模型到 dependencies/models/
   --data           下载数据集到 dependencies/data/UMU-bench/
-  --vllm [VER]     安装 vLLM (默认最新, 曾用 0.11.0)
+  --vllm [VER]     vLLM (默认最新; auto 配到 torch cu128 时自动选 0.11.0)
   --verify         下载后/对已有模型做 transformers 加载验证
   --all            等价 --pip --models --data --vllm
   --env-name NAME  conda 环境名(默认 maw), 首次自动创建
@@ -145,27 +151,17 @@ EOF
   echo "== 已写入 pip 配置: ${HOME}/.config/pip/pip.conf (${url}) =="
 }
 
-map_cuda_to_index() {
-  case "${1:-}" in
-    cu118) TORCH_INDEX="https://download.pytorch.org/whl/cu118" ;;
-    cu121) TORCH_INDEX="https://download.pytorch.org/whl/cu121" ;;
-    cu126) TORCH_INDEX="https://download.pytorch.org/whl/cu126" ;;
-    cu128) TORCH_INDEX="https://download.pytorch.org/whl/cu128" ;;
-    auto)
-      if [[ "$CUDA_VER" =~ ^([0-9]+)\.([0-9]+) ]]; then
-        major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
-        if   (( major > 12 || (major == 12 && minor >= 8) )); then TORCH_INDEX="https://download.pytorch.org/whl/cu128"
-        elif (( major == 12 && minor >= 6 )); then TORCH_INDEX="https://download.pytorch.org/whl/cu126"
-        elif (( major >= 12 )); then TORCH_INDEX="https://download.pytorch.org/whl/cu121"
-        else TORCH_INDEX="https://download.pytorch.org/whl/cu118"; fi
-      else
-        echo "!! 无法识别驱动 CUDA, 无法自动选 torch 索引" >&2
-        TORCH_INDEX=""
-      fi
-      ;;
-    "") TORCH_INDEX="" ;;
-    *) echo "!! 未知 torch 索引: $1 (cu118|cu121|cu126|cu128|auto)" >&2; usage ;;
-  esac
+driver_cu_label() {
+  local major minor
+  if [[ "$CUDA_VER" =~ ^([0-9]+)\.([0-9]+) ]]; then
+    major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
+    if   (( major > 12 || (major == 12 && minor >= 8) )); then echo cu128
+    elif (( major == 12 && minor >= 6 )); then echo cu126
+    elif (( major >= 12 )); then echo cu121
+    else echo cu118; fi
+  else
+    echo ""
+  fi
 }
 
 ensure_hf_cli() {
@@ -198,15 +194,30 @@ dl_hf() { # $1=repo  $2=repo-type  $3=目标目录
 # 各步骤
 # ---------------------------------------------------------------------------
 step_pip() {
-  if [[ -n "$TORCH_INDEX" ]]; then
-    echo "== pip install torch/torchvision (index: ${TORCH_INDEX}) =="
-    pip install --index-url "$TORCH_INDEX" torch torchvision
+  local cu=""
+  if [[ -n "$TORCH_CU" ]]; then
+    if [[ "$TORCH_CU" == "auto" ]]; then cu="$(driver_cu_label)"; else cu="$TORCH_CU"; fi
+  fi
+  if [[ -z "$cu" && "$CUDA_VER" != "unknown" ]] && ! python -c 'import torch' >/dev/null 2>&1; then
+    cu="$(driver_cu_label)"
+    [[ -n "$cu" ]] && echo "== 自动档: 驱动 CUDA ${CUDA_VER} -> 选 torch ${cu} =="
+  fi
+  if [[ -n "$cu" ]]; then
+    case "$cu" in cu118|cu121|cu126|cu128) ;; *)
+      echo "!! 未知 cu: ${cu} (cu118|cu121|cu126|cu128)" >&2; exit 1 ;; esac
+    local tv="${TORCH_PIN[$cu]}" tvv="${TVISION_PIN[$cu]}"
+    echo "== pip install torch==${tv} torchvision==${tvv} (PyPI/${cu} 默认构建) =="
+    pip install "torch==${tv}" "torchvision==${tvv}"
+    if [[ "$DO_VLLM" == 1 && -z "$VLLM_VERSION" && "$cu" == "cu128" ]]; then
+      VLLM_VERSION="0.11.0"
+      echo "== 自动选择 vllm==${VLLM_VERSION} (与 torch 2.8.0+cu128 配套) =="
+    fi
   else
     if python -c 'import torch' >/dev/null 2>&1; then
-      echo "== torch 已存在, 跳过 (用 --torch cuXXX 可重装) =="
+      echo "== torch 已存在, 跳过 (--torch cuXXX / 有卡时 auto 可重装) =="
     else
-      echo "!! 未检测到 torch。pip -r 将尝试安装默认 torch 构建; 若需匹配 CUDA," >&2
-      echo "   请用 --torch cuXXX 显式指定(如 A800 建议 cu126/cu128, RTX5090 需 cu128)。" >&2
+      echo "!! 无法确定 CUDA(无卡/无驱动) 且未给 --torch: 将装默认最新 torch;" >&2
+      echo "   有卡后可用 --torch auto 或 cuXXX 装匹配版本。" >&2
     fi
   fi
   echo "== pip install -r env/requirements.txt =="
@@ -268,7 +279,9 @@ PY
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pip)         DO_PIP=1; SPECIFIED=1; shift ;;
-    --torch)       map_cuda_to_index "${2:-auto}"; DO_PIP=1; SPECIFIED=1; shift ${2:+2} || shift ;;
+    --torch)       TORCH_CU="auto"; DO_PIP=1; SPECIFIED=1
+                   shift
+                   if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then TORCH_CU="$1"; shift; fi ;;
     --models)      DO_MODELS=1; SPECIFIED=1; shift ;;
     --data)        DO_DATA=1; SPECIFIED=1; shift ;;
     --vllm)        DO_VLLM=1; SPECIFIED=1
@@ -304,7 +317,7 @@ cat <<EOF
   pip-index : ${PIP_INDEX:-（不动 pip 配置）}
   GPU       : ${GPU_NAME}   CUDA(drv): ${CUDA_VER}
   ---- 步骤 ----
-  pip      : $([[ $DO_PIP = 1 ]] && echo yes || echo no)   (torch-index: ${TORCH_INDEX:-跳过})
+  pip      : $([[ $DO_PIP = 1 ]] && echo yes || echo no)   (torch: ${TORCH_CU:-auto/已装跳过})
   models   : $([[ $DO_MODELS = 1 ]] && echo yes || echo no)
               vanilla -> ${VANILLA_REPO}  (${MODEL_DIR}/${VANILLA_NAME})
               origin  -> ${ORIGIN_REPO}   (${MODEL_DIR}/${ORIGIN_NAME})   [参考项目称 oracle]
