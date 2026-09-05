@@ -3,13 +3,15 @@
 #
 # 布局: results/<LABEL>/<timestamp>/{logs/{stdout.log,tensorboard/},
 #                                  config/args.json,
-#                                  model/                (最终, GA/KLmin/MAW)
-#                                  runs/<epoch>/{model/,metrics/}   (仅 MAW 逐 epoch)}
+#                                  model/                (最终, GA/KLmin/MAW/simNPO/simPO)
+#                                  runs/<epoch>/{model/,metrics/}   (逐 epoch: MAW/simNPO/simPO)}
 #
 # 用法(在 code/ 内、已激活实验 conda 环境, 建议 tmux 运行):
 #   ./scripts/run_unlearn.sh GA       --num_epochs 3     # 仅训练
 #   ./scripts/run_unlearn.sh KLmin    --eval             # 训练 + 最终评估
 #   ./scripts/run_unlearn.sh MAW      --eval             # 训练 + 逐 epoch 评估
+#   ./scripts/run_unlearn.sh simNPO   --eval             # simNPO 逐 epoch
+#   ./scripts/run_unlearn.sh simPO    --eval             # simPO 逐 epoch
 #   MAW_NPROC=4 ./scripts/run_unlearn.sh MAW --eval
 #   DATA_SPLIT_DIR=... MODEL_DIR=... ./scripts/run_unlearn.sh GA --eval
 set -euo pipefail
@@ -17,7 +19,7 @@ set -euo pipefail
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
 METHOD="${1:-}"
-[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW> [--eval] [args...]" >&2; exit 1; }
+[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW|simNPO|simPO> [--eval] [args...]" >&2; exit 1; }
 shift
 
 DO_EVAL=0
@@ -29,11 +31,12 @@ for arg in "$@"; do
   esac
 done
 
+# label↔模块: GA↔GA, KLmin↔KL, MAW/simNPO/simPO↔同名模块
 case "${METHOD}" in
-  GA)    MODULE="GA" ;;
-  KLmin) MODULE="KL" ;;
-  MAW)   MODULE="MAW" ;;
-  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW)" >&2; exit 1 ;;
+  GA)    MODULE="GA"; PER_EPOCH=0 ;;
+  KLmin) MODULE="KL"; PER_EPOCH=0 ;;
+  MAW|simNPO|simPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
+  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|simNPO|simPO)" >&2; exit 1 ;;
 esac
 LABEL="${METHOD}"
 
@@ -88,13 +91,13 @@ echo "== 训练: exp.unlearn.${MODULE} =="
   else
     "${PYTHON}" -m "exp.unlearn.${MODULE}" \
       --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
-      --data_split_dir "${DATA_SPLIT_DIR}" \
+      --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
       "${TRAIN_ARGS[@]}"
   fi
 )
 
 if [ "${DO_EVAL}" = "1" ]; then
-  if [ "${MODULE}" = "MAW" ]; then
+  if [ "${PER_EPOCH}" = "1" ]; then
     for epoch_model in "${RUN_DIR}"/runs/epoch-*/model; do
       [ -d "${epoch_model}" ] || continue
       local_epoch="$(basename "$(dirname "${epoch_model}")")"
