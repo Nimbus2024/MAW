@@ -466,16 +466,18 @@ def main(args):
                 model, ref_model, batch_um["batch_w"], batch_um["batch_l"], beta=args.beta)
 
             # ── Dynamic gamma from the global, smoothed absolute gap ──
-            # All ranks must use the same controller state and loss weight.
-            # The local DPO gradients are still averaged normally by DDP.
-            M_mul = accelerator.reduce(M_mul, reduction="mean")
-            M_uni = accelerator.reduce(M_uni, reduction="mean")
-            # Positive gap means VQA is ahead. Once its smoothed lead exceeds
-            # target_gap, increase the QA weight by gamma_gain per gap unit.
-            gap = M_mul - M_uni
-            gap_ema = args.rho * gap_ema + (1.0 - args.rho) * gap
-            raw_gamma = args.gamma0 + args.gamma_gain * (gap_ema - args.target_gap)
-            gamma = min(args.gamma_max, max(args.gamma_min, raw_gamma.item()))
+            # gamma is a controller weight, not part of the loss. Margins M_* are
+            # already detached and the whole block runs under no_grad, producing
+            # plain floats, so backward flows only through loss_mul/loss_uni.
+            with torch.no_grad():
+                M_mul = accelerator.reduce(M_mul, reduction="mean")
+                M_uni = accelerator.reduce(M_uni, reduction="mean")
+                gap = float(M_mul - M_uni)
+                gap_ema = args.rho * gap_ema + (1.0 - args.rho) * gap
+                raw_gamma = args.gamma0 + args.gamma_gain * (gap_ema - args.target_gap)
+                gamma = float(min(args.gamma_max, max(args.gamma_min, raw_gamma)))
+            m_mul = float(M_mul)
+            m_uni = float(M_uni)
 
             # ── Forget backward ──
             loss_forget = loss_mul + gamma * loss_uni
@@ -483,10 +485,10 @@ def main(args):
             step_log["l_mul"] = loss_mul.item()
             step_log["l_uni"] = loss_uni.item()
             step_log["gamma"] = gamma
-            step_log["gap_ema"] = gap_ema.item() if hasattr(gap_ema, 'item') else gap_ema
-            step_log["M_uni"] = M_uni.item() if hasattr(M_uni, 'item') else M_uni
-            step_log["M_mul"] = M_mul.item() if hasattr(M_mul, 'item') else M_mul
-            step_log["gap"] = gap.item() if hasattr(gap, 'item') else gap
+            step_log["gap_ema"] = gap_ema
+            step_log["M_uni"] = m_uni
+            step_log["M_mul"] = m_mul
+            step_log["gap"] = gap
 
             # ── Retain KL (仅 λ>0 时启用) ──
             if args.lmbda > 0:
