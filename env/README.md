@@ -1,32 +1,50 @@
 # 环境配置说明
 
-本目录存放实验环境的依赖声明与配置入口。
+本目录存放实验环境的依赖声明与**一键配置入口**。
 
-## 一键配置（推荐）
+## 新服务器配置环境工作流（一键）
 
-首次在（新）服务器上配置环境，请运行一键脚本 `scripts/setup_env.sh`
-（服务器上**必须用 tmux** 启动，防止长时间下载被断连中断）：
+只需在服务器上执行**一个批处理脚本** `scripts/setup_env.sh`，脚本内部按需委托
+更合适的工具完成各子步骤（conda 建环境 / pip 装库 / huggingface_hub 的 `hf`
+下载模型与数据集），无需记忆多步命令：
 
 ```bash
-tmux new -s setup                          # 新开 tmux 会话
+# ①（建议）新开 tmux 会话防断连
+tmux new -s setup
 cd code
-./scripts/setup_env.sh --dry-run           # ① 先看执行计划（不做事）
-./scripts/setup_env.sh --yes               # ② 默认执行: pip 依赖 + 模型 + 数据集
+
+# ② 先看执行计划（不做事）
+./scripts/setup_env.sh --dry-run
+
+# ③ 一键执行（默认: pip 依赖 + 下载模型 + 下载数据集）
+#    首次运行会自动创建 conda 环境(默认 maw, python 3.10)，一切在该 env 内进行
+./scripts/setup_env.sh --pip-index ustc --yes
 ```
 
-脚本负责：安装 `env/requirements.txt` 依赖、把 vanilla / origin 模型下载到
-`dependencies/models/`、把 UMU-bench 数据集下载到 `dependencies/data/`；
-幂等（已完成自动跳过）、全程 `tee` 留日志
-（`scripts/setup_env_<时间戳>.log`），便于复查。更多选项见 `--help`：
+脚本做了什么：
+
+| 子步骤 | 委托工具 | 说明 |
+|---|---|---|
+| Python 环境 | `conda` | 自动创建 `maw`(python 3.10)；已存在则复用 |
+| pip 依赖 | `pip` | `pip install -r env/requirements.txt` |
+| torch | `pip` | 可选 `--torch cuXXX`/`auto` 装匹配 CUDA 的版本 |
+| **模型下载** | **`hf download`**（Python huggingface_hub CLI） | → `dependencies/models/{llava-1.5-7b-hf, llava_smu_ft}` |
+| **数据集下载** | 同上 | → `dependencies/data/UMU-bench` |
+| vLLM（可选） | `pip` + import 自检 | 版本随 CUDA 选择（曾用 0.11.0） |
+
+常用选项（全部见 `--help`）：
 
 ```bash
-./scripts/setup_env.sh --all               # 全部 + vLLM
-./scripts/setup_env.sh --vllm 0.11.0       # 只装指定版本 vLLM
-./scripts/setup_env.sh --pip --torch cu128 # 装依赖并按 cu128 索引装 torch
-./scripts/setup_env.sh --models --data     # 只重新下模型和数据集
+./scripts/setup_env.sh --all                          # 默认 + vLLM
+./scripts/setup_env.sh --pip --torch cu128            # 按 cu128 装 torch 再装依赖
+./scripts/setup_env.sh --models --data                # 只下模型/数据集（重下加 --force）
+./scripts/setup_env.sh --pip-index huawei             # pip 源预设: ustc|aliyun|huawei|tuna|pypi 或完整 URL
+./scripts/setup_env.sh --verify                       # 对已下载模型做 transformers 加载验证
+./scripts/setup_env.sh --env-name myenv               # 自定义 conda 环境名
 ```
 
-> 建议先按本文件「关键注意」手动装好与 GPU 匹配的 torch，再跑一键脚本。
+要点：全程幂等（已完成自动跳过）；`tee` 留日志
+（`scripts/setup_env_<时间戳>.log`）；执行前打印计划表，便于复查问题。
 
 ## 术语
 
@@ -36,15 +54,15 @@ cd code
 
 ## 关键注意
 
-1. **torch 版本不锁定**：由服务器 GPU/CUDA 决定。例如 AutoDL RTX 5090
-   需 `torch>=2.4`（cu128），须在环境里单独安装匹配版本再 `--pip`。
-2. `vllm` 为 `eval_vllm.py` 的推理后端，版本随 CUDA 环境选择（曾用 0.11.0）。
-3. 数据与权重统一放 `dependencies/{models,data}`，由脚本一次性下载，
-   实验代码只读不重下。
+1. **torch 版本不锁定**：由服务器 GPU/CUDA 决定（如 RTX 5090/Blackwell 需 cu128）。
+   `--pip` 不带 `--torch` 时若 torch 缺失，会装默认构建；要精确匹配请用 `--torch cuXXX`。
+2. **pip 网络**：部分机房访问 pypi.org / download.pytorch.org 慢或被墙，
+   用 `--pip-index` 切国内镜像（实测 USTC、华为云较快）。
+3. **HF 下载**：默认走 `hf-mirror.com`，禁用 xet/软链。
+4. 数据与权重统一放 `dependencies/{models,data}`，由脚本一次性下载，实验代码只读不重下。
 
-## 待补（Phase B，接线）
+## 目录规范（实验结果侧）
 
-- 实验代码目前仍按 `repo_id + local_files_only`（命中 HF 缓存）加载；
-  待改为从 `dependencies/models/` 本地路径加载（角色 vanilla / origin），
-  并重写 `scripts/run_unlearn.sh` 对齐项目目录/命名规范
-  （label 白名单、`YYYYMMDD_HHMMSS` 时间戳、`logs/stdout.log`、tmux、runs/）。
+实验代码已接线为从 `dependencies/` 本地路径加载。跑实验/评估见 `scripts/` 下的
+`run_unlearn.sh` / `run_retrain.sh` / `run_eval.sh`（产物对齐项目目录/命名规范：
+label 白名单、`YYYYMMDD_HHMMSS` 时间戳、`logs/stdout.log`、tmux、runs/）。
