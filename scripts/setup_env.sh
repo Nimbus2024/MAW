@@ -101,13 +101,13 @@ resolve_conda() {
   elif [[ -x /root/miniconda3/bin/conda ]]; then CONDA=/root/miniconda3/bin/conda
   elif [[ -x "$HOME/miniconda3/bin/conda" ]]; then CONDA="$HOME/miniconda3/bin/conda"
   else echo "!! 未找到 conda。请先安装 miniconda 或提供 conda 于 PATH。" >&2; exit 1; fi
+  local base
+  base="$("$CONDA" info --base 2>/dev/null | tr -d '[:space:]')"
+  ENV_DIR="${base}/envs/${ENV_NAME}"
 }
 
 ensure_env() {
   resolve_conda
-  local base
-  base="$("$CONDA" info --base 2>/dev/null | tr -d '[:space:]')"
-  ENV_DIR="${base}/envs/${ENV_NAME}"
   if [[ ! -d "$ENV_DIR" ]]; then
     echo "== 创建 conda 环境 ${ENV_NAME} (python=${ENV_PY}) =="
     # --override-channels -c defaults: 避免自定义 channel(可能不可达/403) 导致失败
