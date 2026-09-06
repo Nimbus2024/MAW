@@ -144,8 +144,11 @@ if [ "${DO_EVAL}" = "1" ]; then
         "${RUN_DIR}/runs/${local_epoch}/metrics" \
         "${LABEL}_${local_epoch}"
     done
-    # 最终模型(model/ = 末 epoch 软链)额外做一次全量评估(EVAL_CAP 清空)
-    EVAL_CAP="" eval_adapter "${RUN_DIR}/model" "${RUN_DIR}/metrics" "${LABEL}_final"
+    # 逐 epoch 评估(用 EVAL_CAP 抽样)。最终 model/ 的"全量"评估只在调优定稿后
+    # FINAL_FULL=1 才执行, 避免每轮都跑全量浪费。
+    if [ "${FINAL_FULL:-0}" = "1" ]; then
+      EVAL_CAP="" eval_adapter "${RUN_DIR}/model" "${RUN_DIR}/metrics" "${LABEL}_final"
+    fi
   else
     eval_adapter "${RUN_DIR}/model" "${RUN_DIR}/metrics" "${LABEL}_final"
   fi
