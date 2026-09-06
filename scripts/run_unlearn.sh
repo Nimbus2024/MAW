@@ -45,9 +45,9 @@ case "${METHOD}" in
 esac
 LABEL="${METHOD}"
 
-# 每进程数: MAW 默认 4 卡 DDP, 其余单进程
+# 每进程数: MAW 默认 4 卡 DDP; MAW_SINGLE=1 时单进程 auto-shard(权重摊到各卡, 激活余量大)
 NPROC=1
-[ "${MODULE}" = "MAW" ] && NPROC="${MAW_NPROC:-4}"
+[ "${MODULE}" = "MAW" ] && { [ "${MAW_SINGLE:-0}" = "1" ] && NPROC=1 || NPROC="${MAW_NPROC:-4}"; }
 GBS="${GBS:-}"
 if [[ -n "${GBS}" ]]; then
   if [ $((GBS % NPROC)) -ne 0 ]; then
@@ -103,16 +103,16 @@ eval_adapter() {
 echo "== 训练: exp.unlearn.${MODULE} =="
 (
   cd "${CODE_ROOT}"
-  if [ "${MODULE}" = "MAW" ]; then
+  if [ "${MODULE}" = "MAW" ] && [ "${MAW_SINGLE:-0}" != "1" ]; then
     "${PYTHON}" -m accelerate.commands.launch --num_processes "${MAW_NPROC:-4}" \
       -m exp.unlearn.MAW \
       --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
       --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
       "${TRAIN_ARGS[@]}"
   else
-    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); simNPO/simPO 有
+    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); simNPO/simPO/MAW(single) 有
     extra=()
-    case "${MODULE}" in simNPO|simPO) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
+    case "${MODULE}" in simNPO|simPO|MAW) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
     "${PYTHON}" -m "exp.unlearn.${MODULE}" \
       --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
       --data_split_dir "${DATA_SPLIT_DIR}" \

@@ -124,20 +124,21 @@ def main(args):
         for pair in bar:
             mm, um = pair["mm"], pair["um"]
             loss_mm = compute_simpo_loss(
-                model, mm["batch_w"], mm["batch_l"], args.beta, args.gamma)
+                model, mm["batch_w"], mm["batch_l"], args.beta, args.gamma).mean()
+            accelerator.backward(0.5 * loss_mm)
             loss_um = compute_simpo_loss(
-                model, um["batch_w"], um["batch_l"], args.beta, args.gamma)
-            loss = (loss_mm.mean() + loss_um.mean()) / 2.0
-            accelerator.backward(loss)
+                model, um["batch_w"], um["batch_l"], args.beta, args.gamma).mean()
+            accelerator.backward(0.5 * loss_um)
             accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
             lr_scheduler.step()
+            loss = 0.5 * (loss_mm + loss_um)
             total_loss += loss.item()
             if writer is not None:
                 writer.add_scalar("Loss/train", loss.item(), global_step)
-                writer.add_scalar("Loss/mm", loss_mm.mean().item(), global_step)
-                writer.add_scalar("Loss/um", loss_um.mean().item(), global_step)
+                writer.add_scalar("Loss/mm", loss_mm.item(), global_step)
+                writer.add_scalar("Loss/um", loss_um.item(), global_step)
             global_step += 1
             bar.set_postfix(loss=loss.item())
             if args.max_steps is not None and global_step >= args.max_steps:
