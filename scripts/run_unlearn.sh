@@ -110,9 +110,13 @@ echo "== 训练: exp.unlearn.${MODULE} =="
       --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
       "${TRAIN_ARGS[@]}"
   else
+    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); simNPO/simPO 有
+    extra=()
+    case "${MODULE}" in simNPO|simPO) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
     "${PYTHON}" -m "exp.unlearn.${MODULE}" \
       --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
-      --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
+      --data_split_dir "${DATA_SPLIT_DIR}" \
+      "${extra[@]}" \
       "${TRAIN_ARGS[@]}"
   fi
 )
