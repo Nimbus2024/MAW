@@ -260,11 +260,15 @@ def main(args):
             global_step += 1
 
             mix_progress_bar.set_postfix({"step_loss": step_loss, "total_loss": total_loss})
+            if args.max_steps is not None and global_step >= args.max_steps:
+                break
 
         # 如果需要每个epoch结束时打印一下平均loss，可以加在循环外
         avg_loss = total_loss / (len(train_dataloader))
         print(f"Epoch {epoch+1} - Average Loss: {avg_loss:.4f}")
         writer.add_scalar("loss/epoch_avg", avg_loss, epoch)
+        if args.max_steps is not None and global_step >= args.max_steps:
+            break
 
     writer.close()
     # Save the LoRA adapter only (not the merged full model) to save disk space.
@@ -291,6 +295,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=6, help="Batch size for training")
     parser.add_argument("--alpha", type=float, default=1, help="alpha")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--max_steps", type=int, default=None,
+                        help="Optional optimizer-step limit")
     parser.add_argument("--num_epochs", type=int, default=5, help="Number of epochs for training")
     parser.add_argument("--max_length", type=int, default=384, help="Maximum sequence length")
     parser.add_argument("--lora_r", type=int, default=64, help="LoRA rank (default 64)")
