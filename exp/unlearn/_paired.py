@@ -5,6 +5,11 @@
 依赖前提（构建时断言）：每行 MM_QA 与 UM_QA 的 question 字典 key 集合、顺序、数量一致。
 每个训练 step 内的 mm[i] 与 um[i] 恒为同一道题。
 
+数据核对(UMU-bench 训练分片, MM_QA vs UM_QA 同 (row,key))：12 个 key 中除 `Name` 外
+答案完全一致、提问仅差人称("this person"/人名)；`Name` 例外: MM 短问短答(人名) vs
+UM 长问长 bio——仍视为同一人物身份知识、保留成对。评测列(Classify/Cloze/Generation)
+为测试专用, 不参与训练；biography 官方训练亦不使用。
+
 内容形态：
   plain: {mm:{image,question,answer}, um:{question,answer}}   (GA/KLmin/simNPO/retrain)
   dpo  : 额外每题共用同一 idk: mm/um 各带 answer_plus(forget) 与 answer_0(idk)
