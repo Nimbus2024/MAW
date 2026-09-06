@@ -9,9 +9,10 @@ import argparse
 import inspect
 from PIL import Image
 import torch
+from torch.optim import AdamW
 from transformers import (
     BitsAndBytesConfig, LlavaForConditionalGeneration, AutoProcessor,
-    get_scheduler, AdamW, AutoTokenizer
+    get_scheduler, AutoTokenizer
 )
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 import json

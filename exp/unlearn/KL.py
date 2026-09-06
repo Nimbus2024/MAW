@@ -4,6 +4,7 @@ import time
 from collections import defaultdict, Counter
 
 import pandas as pd
+from torch.optim import AdamW
 from torch.utils.data import DataLoader, random_split, RandomSampler
 from tqdm import tqdm
 from peft import PeftModel
@@ -17,7 +18,7 @@ from torch.utils.data import Subset
 import argparse
 from PIL import Image
 import torch
-from transformers import BitsAndBytesConfig, LlavaForConditionalGeneration, AutoProcessor, get_scheduler, AdamW, \
+from transformers import BitsAndBytesConfig, LlavaForConditionalGeneration, AutoProcessor, get_scheduler, \
     LlavaNextForConditionalGeneration, LlavaNextProcessor, Idefics2ForConditionalGeneration, AutoTokenizer
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 import json
