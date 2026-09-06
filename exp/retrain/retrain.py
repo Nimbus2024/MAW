@@ -16,7 +16,7 @@ from accelerate import Accelerator
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from .. import _paths
-from ..unlearn.unlearn_dataset import Muitimodal_Dataset, train_collate_fn_llava_multimodal
+from ..unlearn._paired import PairedDataset, build_pairs, collate_plain
 
 def find_all_linear_names(model):
     cls = torch.nn.Linear
@@ -66,9 +66,11 @@ def main(args):
     model.print_trainable_parameters()
 
     df = pd.read_parquet(args.data_dir)
-    ds = Muitimodal_Dataset(df=df)
-    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True,
-                    collate_fn=lambda x: train_collate_fn_llava_multimodal(x, processor, args))
+    pairs = build_pairs(df)
+    pair_ds = PairedDataset(pairs)
+    dl = DataLoader(pair_ds, batch_size=args.batch_size, shuffle=True,
+                    collate_fn=lambda x: collate_plain(x, processor, args))
+    print(f"Retrain pairs (VQA+QA): {len(pair_ds)}")
 
     accelerator = Accelerator()
     optimizer = AdamW(model.parameters(), lr=args.lr)
@@ -82,11 +84,13 @@ def main(args):
         model.train()
         total_loss = 0
         bar = tqdm(dl, desc=f"Epoch {epoch+1}")
-        for batch in bar:
-            input_ids, attention_mask, pixel_values, labels = batch
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask,
-                            pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss
+        for pair in bar:
+            loss = 0.0
+            for side in ("mm", "um"):
+                input_ids, attention_mask, pixel_values, labels = pair[side]
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask,
+                                pixel_values=pixel_values, labels=labels)
+                loss = loss + outputs.loss
             accelerator.backward(loss)
             optimizer.step()
             optimizer.zero_grad()

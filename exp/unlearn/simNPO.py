@@ -29,6 +29,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from .. import _paths
+from ._paired import PairedDataset, build_pairs, collate_plain
 from .MAW import _sequence_logprob, find_all_linear_names, set_global_seed, worker_init_fn
 from .unlearn_dataset import (
     Muitimodal_Dataset,
@@ -84,13 +85,12 @@ def main(args):
     df_forget = pd.read_parquet(
         os.path.join(forget_folder, "train-00000-of-00001.parquet"))
 
-    mm_ds = Muitimodal_Dataset(df=df_forget)
-    um_ds = Unimodal_Dataset(df=df_forget)
-    dl_mm = DataLoader(mm_ds, batch_size=args.batch_size, shuffle=True,
-                       collate_fn=lambda x: train_collate_fn_llava_multimodal(x, processor, args))
-    dl_um = DataLoader(um_ds, batch_size=args.batch_size, shuffle=True,
-                       collate_fn=lambda x: train_collate_fn_llava_unimodal(x, processor, args))
-    print(f"Forget MM: {len(mm_ds)}, Forget UM: {len(um_ds)}")
+    pairs = build_pairs(df_forget)
+    pair_ds = PairedDataset(pairs)
+    train_dataloader = DataLoader(
+        pair_ds, batch_size=args.batch_size, shuffle=True,
+        collate_fn=lambda x: collate_plain(x, processor, args))
+    print(f"Forget pairs: {len(pair_ds)}")
 
     accelerator = Accelerator(
         kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])
@@ -98,16 +98,17 @@ def main(args):
     optimizer = AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = get_scheduler(
         name="linear", optimizer=optimizer, num_warmup_steps=0,
-        num_training_steps=len(dl_mm) * args.num_epochs)
-    model, optimizer, dl_mm, dl_um, lr_scheduler = accelerator.prepare(
-        model, optimizer, dl_mm, dl_um, lr_scheduler)
+        num_training_steps=len(train_dataloader) * args.num_epochs)
+    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, lr_scheduler)
 
     global_step = 0
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0.0
-        bar = tqdm(zip(dl_mm, dl_um), desc=f"Epoch {epoch+1}", total=len(dl_mm))
-        for (mm, um) in bar:
+        bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", total=len(train_dataloader))
+        for pair in bar:
+            mm, um = pair["mm"], pair["um"]
             input_ids, attn, pixel, labels = mm
             loss_mm = compute_simnpo_loss(model, input_ids, attn, pixel, labels,
                                           args.beta, args.gamma)
@@ -130,7 +131,7 @@ def main(args):
             if args.max_steps is not None and global_step >= args.max_steps:
                 break
 
-        avg_loss = total_loss / len(dl_mm)
+        avg_loss = total_loss / len(train_dataloader)
         if writer is not None:
             writer.add_scalar("Loss/epoch", avg_loss, epoch)
         print(f"Epoch {epoch+1} - Avg Loss: {avg_loss:.4f}")

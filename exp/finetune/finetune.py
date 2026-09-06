@@ -126,7 +126,7 @@ def main(args):
         name="linear",
         optimizer=optimizer,
         num_warmup_steps=0,
-        num_training_steps=len(train_dataloader_multimodal) * args.num_epochs,
+        num_training_steps=(len(train_dataloader_multimodal) + len(train_dataloader_unimodal)) * args.num_epochs,
     )
 
     # Prepare model and dataloaders with accelerator
@@ -134,42 +134,29 @@ def main(args):
         model, optimizer, train_dataloader_multimodal, train_dataloader_unimodal, lr_scheduler
     )
 
-    # Training loop
+    # Training loop (multimodal + unimodal 都训)
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0
-        multi_progress_bar = tqdm(train_dataloader_multimodal, desc=f"Epoch {epoch + 1}")
-
-        for batch in multi_progress_bar:
-            input_ids, attention_mask, pixel_values, labels = batch
-            outputs = model(input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            pixel_values=pixel_values,
-                            labels=labels)
-            loss = outputs.loss
-            accelerator.backward(loss)
-            optimizer.step()
-            optimizer.zero_grad()
-            lr_scheduler.step()
-            total_loss += loss.item()
-
-            multi_progress_bar.set_postfix(loss=total_loss / len(multi_progress_bar))
-            print(f"Epoch {epoch + 1} Loss: {total_loss / len(train_dataloader_multimodal)}")
-
-
-        # uni_progress_bar = tqdm(train_dataloader_unimodal, desc=f"Epoch {epoch + 1}")
-        # for batch in uni_progress_bar:
-        #     input_ids, attention_mask, _, labels = batch
-        #     outputs = model(input_ids=input_ids,
-        #                     attention_mask=attention_mask,
-        #                     labels=labels)
-        #     loss = outputs.loss
-        #     accelerator.backward(loss)
-        #     optimizer.step()
-        #     optimizer.zero_grad()
-        #     lr_scheduler.step()
-        #     total_loss += loss.item()
-        #     uni_progress_bar.set_postfix(loss=total_loss / len(uni_progress_bar))
+        n_steps = 0
+        for dataloader, tag in ((train_dataloader_multimodal, "multi"),
+                                (train_dataloader_unimodal, "uni")):
+            bar = tqdm(dataloader, desc=f"Epoch {epoch + 1} [{tag}]")
+            for batch in bar:
+                input_ids, attention_mask, pixel_values, labels = batch
+                outputs = model(input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                pixel_values=pixel_values,
+                                labels=labels)
+                loss = outputs.loss
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+                lr_scheduler.step()
+                total_loss += loss.item()
+                n_steps += 1
+                bar.set_postfix(loss=total_loss / n_steps)
+        print(f"Epoch {epoch + 1} Loss: {total_loss / n_steps}")
 
     # Save final model
     accelerator.wait_for_everyone()

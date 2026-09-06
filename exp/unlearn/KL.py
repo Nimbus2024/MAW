@@ -4,7 +4,7 @@ import time
 from collections import defaultdict, Counter
 
 import pandas as pd
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, RandomSampler
 from tqdm import tqdm
 from peft import PeftModel
 
@@ -22,6 +22,7 @@ from transformers import BitsAndBytesConfig, LlavaForConditionalGeneration, Auto
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 import json
 from .. import _paths
+from ._paired import PairedDataset, build_pairs, collate_plain
 from .unlearn_dataset import Muitimodal_Dataset,Unimodal_Dataset,train_collate_fn_llava_multimodal,train_collate_fn_llava_unimodal
 from PIL import Image
 from accelerate import Accelerator
@@ -185,41 +186,20 @@ def main(args):
     df_forget = pd.read_parquet(forget_parquet_file)
     df_retain = pd.read_parquet(retain_parquet_file)
 
-    multimodel_dataset_forget = Muitimodal_Dataset(df=df_forget,mode=f"forget_{args.forget_split_ratio}")
-    unimodel_dataset_forget = Unimodal_Dataset(df=df_forget,mode=f"forget_{args.forget_split_ratio}")
-    multimodel_dataset_retain = Muitimodal_Dataset(df=df_retain,mode=f"retain_{100-args.forget_split_ratio}")
-    unimodel_dataset_retain = Unimodal_Dataset(df=df_retain,mode=f"retain_{100-args.forget_split_ratio}")
+    forget_pairs = build_pairs(df_forget)
+    forget_ds = PairedDataset(forget_pairs)
+    dl_forget = DataLoader(forget_ds, batch_size=args.batch_size, shuffle=True,
+                           collate_fn=lambda x: collate_plain(x, processor, args))
+    print(f"Forget pairs: {len(forget_ds)}")
 
-
-    if _paths.is_llava(args.model_id):
-        train_dataloader_multimodal_forget = DataLoader(
-            multimodel_dataset_forget,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda x: train_collate_fn_llava_multimodal(x, processor, args)
-        )
-        train_dataloader_unimodal_forget = DataLoader(
-            unimodel_dataset_forget,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda x: train_collate_fn_llava_unimodal(x, processor, args)
-        )
-        train_dataloader_multimodal_retain = DataLoader(
-            multimodel_dataset_retain,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda x: train_collate_fn_llava_multimodal(x, processor, args)
-        )
-        train_dataloader_unimodal_retain = DataLoader(
-            unimodel_dataset_retain,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda x: train_collate_fn_llava_unimodal(x, processor, args)
-        )
-
-    else:
-        raise ValueError("Model ID not recognized or not supported. Please provide a valid model ID.")
-
+    retain_pairs = build_pairs(df_retain)
+    retain_ds = PairedDataset(retain_pairs)
+    retain_samples = len(forget_ds)
+    dl_retain = DataLoader(retain_ds, batch_size=args.batch_size,
+                           sampler=RandomSampler(retain_ds, replacement=False,
+                                                 num_samples=retain_samples),
+                           collate_fn=lambda x: collate_plain(x, processor, args))
+    print(f"Retain pairs: {len(retain_ds)} (每 epoch 抽 {retain_samples})")
 
     # Accelerator setup
     accelerator = Accelerator(
@@ -232,11 +212,11 @@ def main(args):
         name="linear",
         optimizer=optimizer,
         num_warmup_steps=0,
-        num_training_steps=len(train_dataloader_multimodal_forget) * args.num_epochs,
+        num_training_steps=len(dl_forget) * args.num_epochs,
     )
 
-    model, optimizer, train_dataloader_multimodal_forget,train_dataloader_unimodal_forget,train_dataloader_multimodal_retain,train_dataloader_unimodal_retain, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader_multimodal_forget,train_dataloader_unimodal_forget,train_dataloader_multimodal_retain,train_dataloader_unimodal_retain, lr_scheduler
+    model, optimizer, dl_forget, dl_retain, lr_scheduler = accelerator.prepare(
+        model, optimizer, dl_forget, dl_retain, lr_scheduler
     )
 
     # Unified run directory: results/<label>/<timestamp>/ containing
@@ -265,11 +245,15 @@ def main(args):
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0
-        mix_progress_bar = tqdm(zip(train_dataloader_multimodal_forget,train_dataloader_unimodal_forget,train_dataloader_multimodal_retain,train_dataloader_unimodal_retain),
+        mix_progress_bar = tqdm(zip(dl_forget, dl_retain),
                                 desc=f"Epoch {epoch + 1}",
-                                total=len(train_dataloader_multimodal_forget))  # 或者用 len(train_dataloader_unimodal)
+                                total=len(dl_forget))
 
-        for multi_batch_forget, uni_batch_forget,multi_batch_retain, uni_batch_retain in mix_progress_bar:
+        for pair_forget, pair_retain in mix_progress_bar:
+            multi_batch_forget = pair_forget["mm"]
+            uni_batch_forget = pair_forget["um"]
+            multi_batch_retain = pair_retain["mm"]
+            uni_batch_retain = pair_retain["um"]
             # ------------------- 多模态 forward + backward -------------------
             forget_outputs = invoke(multi_batch_forget,model,args.model_id,'multimodal')
 
@@ -322,7 +306,7 @@ def main(args):
             mix_progress_bar.set_postfix({"step_loss": step_loss, "total_loss": total_loss})
 
         # 如果需要每个epoch结束时打印一下平均loss，可以加在循环外
-        avg_loss = total_loss / (len(train_dataloader_multimodal_forget))
+        avg_loss = total_loss / (len(dl_forget))
         print(f"Epoch {epoch+1} - Average Loss: {avg_loss:.4f}")
         writer.add_scalar("loss/epoch_avg", avg_loss, epoch)
 

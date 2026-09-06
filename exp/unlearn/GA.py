@@ -41,6 +41,7 @@ from datasets import load_dataset, Dataset
 
 # Custom modules
 from .. import _paths
+from ._paired import PairedDataset, build_pairs, collate_plain
 from .unlearn_dataset import (
     Muitimodal_Dataset,
     Unimodal_Dataset,
@@ -180,25 +181,12 @@ def main(args):
 
     # Load DataLoader
     df = pd.read_parquet(forget_parquet_file)
-
-    multimodel_dataset = Muitimodal_Dataset(df=df)
-    unimodel_dataset = Unimodal_Dataset(df=df)
-
-    if _paths.is_llava(args.model_id):
-        train_dataloader_multimodal = DataLoader(
-            multimodel_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda x: train_collate_fn_llava_multimodal(x, processor, args)
-        )
-        train_dataloader_unimodal = DataLoader(
-            unimodel_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda x: train_collate_fn_llava_unimodal(x, processor, args)
-        )
-    else:
-        raise ValueError("Model ID not recognized or not supported. Please provide a valid model ID.")
+    pairs = build_pairs(df)
+    pair_ds = PairedDataset(pairs)
+    train_dataloader = DataLoader(
+        pair_ds, batch_size=args.batch_size, shuffle=True,
+        collate_fn=lambda x: collate_plain(x, processor, args))
+    print(f"Forget pairs: {len(pair_ds)}")
 
     # Accelerator setup
     accelerator = Accelerator(
@@ -211,11 +199,11 @@ def main(args):
         name="linear",
         optimizer=optimizer,
         num_warmup_steps=0,
-        num_training_steps=len(train_dataloader_multimodal) * args.num_epochs,
+        num_training_steps=len(train_dataloader) * args.num_epochs,
     )
 
-    model, optimizer, train_dataloader_multimodal,train_dataloader_unimodal, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader_multimodal,train_dataloader_unimodal, lr_scheduler
+    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, lr_scheduler
     )
 
     # Unified run directory: results/<label>/<timestamp>/ containing
@@ -245,10 +233,10 @@ def main(args):
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0
-        mix_progress_bar = tqdm(zip(train_dataloader_multimodal, train_dataloader_unimodal),
-                                desc=f"Epoch {epoch + 1}",
-                                total=len(train_dataloader_multimodal))  # 或者用 len(train_dataloader_unimodal)
-        for multi_batch, uni_batch in mix_progress_bar:
+        mix_progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1}",
+                                total=len(train_dataloader))
+        for pair in mix_progress_bar:
+            multi_batch, uni_batch = pair["mm"], pair["um"]
             outputs = invoke(multi_batch,model,args.model_id,'multimodal')
             # ------------------- 多模态 forward + backward -------------------
             loss_multi = -outputs.loss
@@ -274,7 +262,7 @@ def main(args):
             mix_progress_bar.set_postfix({"step_loss": step_loss, "total_loss": total_loss})
 
         # 如果需要每个epoch结束时打印一下平均loss，可以加在循环外
-        avg_loss = total_loss / (len(train_dataloader_multimodal))
+        avg_loss = total_loss / (len(train_dataloader))
         print(f"Epoch {epoch+1} - Average Loss: {avg_loss:.4f}")
         writer.add_scalar("loss/epoch_avg", avg_loss, epoch)
 

@@ -30,6 +30,7 @@ import ast
 
 # Local imports (v3/unlearn/)
 from .. import _paths
+from ._paired import PairedDataset, build_pairs, collate_plain, collate_dpo
 from .unlearn_dataset import (
     Muitimodal_Dataset,
     Unimodal_Dataset,
@@ -396,35 +397,24 @@ def main(args):
     idk_list = load_idk()
     print(f"Loaded {len(idk_list)} IDK responses")
 
-    # Forget datasets (含 DPO pair)
-    forget_mm = ForgetDataset(df_forget, idk_list, multimodal=True)
-    forget_um = ForgetDataset(df_forget, idk_list, multimodal=False)
-    print(f"Forget MM: {len(forget_mm)}, Forget UM: {len(forget_um)}")
+    # Forget: 同题 DPO 对(每 step mm/um 严格同题, 每题共用同一 idk)
+    forget_pairs = build_pairs(df_forget)
+    forget_ds = PairedDataset(forget_pairs, dpo=True, idk_list=idk_list)
+    dl_forget = DataLoader(forget_ds, batch_size=args.batch_size, shuffle=True,
+                           collate_fn=lambda x: collate_dpo(x, processor, args))
+    print(f"Forget DPO pairs: {len(forget_ds)}")
 
-    # Retain datasets (复用 unlearn_dataset.py)
-    # Keep the complete retain split, then draw a fresh balanced subset on each
-    # epoch through RandomSampler. This matches the benchmark's explicit
-    # sample-limit handling and avoids reusing one fixed subset forever.
-    retain_mm = Muitimodal_Dataset(df=df_retain, mode="retain_full")
-    retain_um = Unimodal_Dataset(df=df_retain, mode="retain_full")
-    print(f"Retain MM: {len(retain_mm)}, Retain UM: {len(retain_um)}")
-
-    # ── DataLoaders ──
-    dl_mm = DataLoader(forget_mm, batch_size=args.batch_size, shuffle=True,
-                       collate_fn=lambda x: collate_forget_mm(x, processor, args))
-    dl_um = DataLoader(forget_um, batch_size=args.batch_size, shuffle=True,
-                       collate_fn=lambda x: collate_forget_um(x, processor, args))
-    retain_samples = len(forget_mm)
+    # Retain: 全量同题 pair, 每 epoch 经 RandomSampler 重新抽取 forget 数量子集
+    retain_pairs = build_pairs(df_retain)
+    retain_ds = PairedDataset(retain_pairs)
+    retain_samples = len(forget_ds)
     if retain_samples == 0:
-        raise ValueError("Forget dataset is empty; cannot determine retain sample count.")
-    dl_ret_mm = DataLoader(retain_mm, batch_size=args.batch_size,
-                           sampler=RandomSampler(retain_mm, replacement=False,
+        raise ValueError("Forget pairs is empty; cannot determine retain sample count.")
+    dl_retain = DataLoader(retain_ds, batch_size=args.batch_size,
+                           sampler=RandomSampler(retain_ds, replacement=False,
                                                  num_samples=retain_samples),
-                           collate_fn=lambda x: train_collate_fn_llava_multimodal(x, processor, args))
-    dl_ret_um = DataLoader(retain_um, batch_size=args.batch_size,
-                           sampler=RandomSampler(retain_um, replacement=False,
-                                                 num_samples=retain_samples),
-                           collate_fn=lambda x: train_collate_fn_llava_unimodal(x, processor, args))
+                           collate_fn=lambda x: collate_plain(x, processor, args))
+    print(f"Retain pairs: {len(retain_ds)} (每 epoch 抽 {retain_samples})")
 
     # ── Accelerator ──
     accelerator = Accelerator(
@@ -436,12 +426,12 @@ def main(args):
     optimizer = AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = get_scheduler(
         name="linear", optimizer=optimizer, num_warmup_steps=0,
-        num_training_steps=len(dl_mm) * args.num_epochs,
+        num_training_steps=len(dl_forget) * args.num_epochs,
     )
 
-    model, ref_model, optimizer, dl_mm, dl_um, dl_ret_mm, dl_ret_um, lr_scheduler = \
-        accelerator.prepare(model, ref_model, optimizer, dl_mm, dl_um,
-                            dl_ret_mm, dl_ret_um, lr_scheduler)
+    model, ref_model, optimizer, dl_forget, dl_retain, lr_scheduler = \
+        accelerator.prepare(model, ref_model, optimizer, dl_forget,
+                            dl_retain, lr_scheduler)
 
     # Start from the desired VQA lead so the controller begins at gamma0.
     gap_ema = args.target_gap
@@ -453,10 +443,14 @@ def main(args):
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0.0
-        progress = tqdm(zip(dl_mm, dl_um, dl_ret_mm, dl_ret_um),
-                        desc=f"Epoch {epoch+1}", total=len(dl_mm))
+        progress = tqdm(zip(dl_forget, dl_retain),
+                        desc=f"Epoch {epoch+1}", total=len(dl_forget))
 
-        for batch_mm, batch_um, batch_ret_mm, batch_ret_um in progress:
+        for pair_forget, pair_retain in progress:
+            batch_mm = pair_forget["mm"]
+            batch_um = pair_forget["um"]
+            batch_ret_mm = pair_retain["mm"]
+            batch_ret_um = pair_retain["um"]
             step_log = {}
 
             # ── DPO forget losses + margins ──
@@ -531,7 +525,7 @@ def main(args):
                 stop_training = True
                 break
 
-        avg_loss = total_loss / len(dl_mm)
+        avg_loss = total_loss / len(dl_forget)
         if writer is not None:
             writer.add_scalar("Loss/epoch", avg_loss, epoch)
         print(f"Epoch {epoch+1} - Avg Loss: {avg_loss:.4f}, Final gap EMA: "
