@@ -26,4 +26,18 @@ echo "== 输出日志: ${RUN_DIR}/logs/stdout.log =="
   "${PYTHON}" -m exp.retrain.retrain --run_dir "${RUN_DIR}" "$@"
 )
 
+# 记录 batch 语义: retrain 单进程, global = batch_size
+if [ -f "${RUN_DIR}/config/args.json" ]; then
+  "${PYTHON}" - "${RUN_DIR}/config/args.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+d = json.load(open(path))
+d["num_processes"] = 1
+per = d.get("batch_size")
+d["global_batch_size"] = int(per) if per else None
+json.dump(d, open(path, "w"), indent=2, default=str)
+print("== args.json 已记录 num_processes/global_batch_size ==")
+PY
+fi
+
 echo "== [$(date +%H:%M:%S)] Done. ${RUN_DIR} =="
