@@ -99,8 +99,12 @@ def main(args):
             writer.add_scalar("loss/train", loss.item(), global_step)
             global_step += 1
             bar.set_postfix(loss=loss.item())
-        avg = total_loss / len(dl)
+            if args.max_steps is not None and global_step >= args.max_steps:
+                break
+        avg = total_loss / (len(dl) if args.max_steps is None else global_step)
         print(f"Epoch {epoch+1} Avg Loss: {avg:.4f}")
+        if args.max_steps is not None and global_step >= args.max_steps:
+            break
 
     writer.close()
     accelerator.wait_for_everyone()
@@ -119,6 +123,7 @@ if __name__ == "__main__":
     ap.add_argument("--batch_size", type=int, default=6)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--num_epochs", type=int, default=5)
+    ap.add_argument("--max_steps", type=int, default=None)
     ap.add_argument("--lora_r", type=int, default=64)
     ap.add_argument("--lora_alpha", type=int, default=16)
     ap.add_argument("--max_length", type=int, default=384)
