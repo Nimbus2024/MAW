@@ -233,16 +233,67 @@ def hyper_table(entries):
 
 
 def label_section(label, entries):
-    out = [f"\\section{{{label}}}", f"\\label{{sec:experiment-{label.lower()}}}",
-           "", "\\subsection{Hyperparameters}", "", hyper_table(entries), "",
-           "\\subsection{Aggregate (All) scores}", "",
-           metric_table(entries, HEAD_AGG, agg_cells, 9),
-           "\\noindent\\small\\emph{Metric definitions: Aggregate = mean of IT and PT; "
-           "forget lower is better, retain/real higher is better.}",
-           "", "\\subsection{Per-modal (IT / PT) scores}", "",
-           metric_table(entries, HEAD_PM, pm_cells, 18),
-           "\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text.}"]
+    out = [f"\\section{{{label}}}", f"\\label{{sec:experiment-{label.lower()}}}"]
+    # 无超参(如 vanilla/origin 纯评估)不生成 Hyperparameters 小节
+    if any(bool({k: v for k, v in e[2].items()
+                 if v is not None and not isinstance(v, (dict, list))}) for e in entries):
+        out += ["", "\\subsection{Hyperparameters}", "", hyper_table(entries), ""]
+    out += [
+        "", "\\subsection{Aggregate (All) scores}", "",
+        metric_table(entries, HEAD_AGG, agg_cells, 9),
+        "\\noindent\\small\\emph{Metric definitions: Aggregate = mean of IT and PT; "
+        "forget lower is better, retain/real higher is better.}",
+        "", "\\subsection{Per-modal (IT / PT) scores}", "",
+        metric_table(entries, HEAD_PM, pm_cells, 18),
+        "\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text.}"]
     return "\n".join(out)
+
+
+GROUPS = ("Forget", "Retain", "Real")
+TASKS = ("Fill", "Classif", "Gen")
+
+
+def _cell_value(entry, g, t, m):
+    data = parse_final(entry[3])
+    it, pt, allv = _task_vals(data, g, t)
+    return {"IT": it, "PT": pt, "All": allv}[m]
+
+
+def _fmt_val(t, v):
+    if v is None:
+        return ""
+    return ("%.1f" if t != "Gen" else "%.3f") % v
+
+
+def overview_table(rows, header, ncols, colspec):
+    """Overview: 每列用更好方标绿(umugreen)、更差方标红(umured)。
+    Forget 越低越好; Retain/Real 越高越好。"""
+    best, worst = {}, {}
+    for ci, (g, t, m) in enumerate(colspec):
+        vals = [(r, _cell_value(r, g, t, m)) for r in rows]
+        nums = [(r, v) for r, v in vals if v is not None]
+        if not nums:
+            continue
+        high = g != "Forget"
+        best[ci] = max(nums, key=lambda x: x[1] if high else -x[1])[0]
+        worst[ci] = min(nums, key=lambda x: x[1] if high else -x[1])[0]
+    lines = ["\\begin{table}[H]", "\\centering", "\\resizebox{\\linewidth}{!}{%",
+             "\\begin{tabular}{l" + "c" * ncols + "}", "\\toprule",
+             header, "\\midrule"]
+    for ri, row in enumerate(rows):
+        cells = [f"\\textbf{{{esc(row[0])}}}"]
+        for ci, (g, t, m) in enumerate(colspec):
+            v = _cell_value(row, g, t, m)
+            s = _fmt_val(t, v)
+            if s:
+                if best.get(ci) is row:
+                    s = f"\\textcolor{{umugreen}}{{{s}}}"
+                elif worst.get(ci) is row:
+                    s = f"\\textcolor{{umured}}{{{s}}}"
+            cells.append(s)
+        lines.append(" & ".join(cells) + " \\\\")
+    lines += ["\\bottomrule", "\\end{tabular}", "}", "\\end{table}"]
+    return "\n".join(lines)
 
 
 def main():
@@ -263,7 +314,9 @@ def main():
         "\\usepackage[UTF8]{ctex}",   # 中文(标题/说明), 建议 xelatex 编译
         "\\usepackage{booktabs}", "\\usepackage{tabularx}",
         "\\usepackage{multirow}", "\\usepackage{graphicx}",
-        "\\usepackage{float}", "\\usepackage[margin=1in]{geometry}",
+        "\\usepackage{float}", "\\usepackage[table]{xcolor}",
+        "\\definecolor{umugreen}{HTML}{228B22}", "\\definecolor{umured}{HTML}{B22222}",
+        "\\usepackage[margin=1in]{geometry}",
         "\\begin{document}", "\\title{UMU-Bench 实验记录}", "\\maketitle",
         "\\section*{Overview}",
         "\\subsection*{Aggregate (All) scores}",
@@ -277,11 +330,13 @@ def main():
             continue
         ov_rows.append((label,) + entry[1:])
     method_head = lambda h: h.replace("Run}", "Method}")
-    doc.append(metric_table(ov_rows, method_head(HEAD_AGG), agg_cells, 9))
+    agg_cols = [(g, t, "All") for g in GROUPS for t in TASKS]
+    pm_cols = [(g, t, m) for g in GROUPS for t in TASKS for m in ("IT", "PT")]
+    doc.append(overview_table(ov_rows, method_head(HEAD_AGG), 9, agg_cols))
     doc.append("")
     doc.append("\\subsection*{Per-modal (IT / PT) scores}")
     doc.append("")
-    doc.append(metric_table(ov_rows, method_head(HEAD_PM), pm_cells, 18))
+    doc.append(overview_table(ov_rows, method_head(HEAD_PM), 18, pm_cols))
     doc.append("")
     for label in labels:
         entries = collect_runs(os.path.join(results_root, label))
