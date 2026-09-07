@@ -270,12 +270,18 @@ def main():
         "",
     ]
     ov = build_overview(results_root)
-    ov_rows = [r for l, r in ov.items() if l in labels]
-    doc.append(metric_table(ov_rows, HEAD_AGG, agg_cells, 9))
+    # Overview: 每 label 一行(行名=label), 仅收录最新 run 有有效 metrics 的 label
+    ov_rows = []
+    for label, entry in ov.items():
+        if label not in labels or parse_final(entry[3]) is None:
+            continue
+        ov_rows.append((label,) + entry[1:])
+    method_head = lambda h: h.replace("Run}", "Method}")
+    doc.append(metric_table(ov_rows, method_head(HEAD_AGG), agg_cells, 9))
     doc.append("")
     doc.append("\\subsection*{Per-modal (IT / PT) scores}")
     doc.append("")
-    doc.append(metric_table(ov_rows, HEAD_PM, pm_cells, 18))
+    doc.append(metric_table(ov_rows, method_head(HEAD_PM), pm_cells, 18))
     doc.append("")
     for label in labels:
         entries = collect_runs(os.path.join(results_root, label))
