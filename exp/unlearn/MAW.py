@@ -174,7 +174,9 @@ def compute_forget_dpo_loss(model, ref_model, batch_w, batch_l, beta=0.4):
     r_w = (logp_w - ref_logp_w) / win_length
     r_l = (logp_l - ref_logp_l) / lose_length
     margin = r_w - r_l
-    dpo_loss = -F.logsigmoid(beta * margin).mean()
+    # 除以 beta: 使梯度不含 beta 系数(d/dθ[-(1/β)logσ(β·m)] = -(1-σ)·m'),
+    # 避免 beta 与 lr 联合放大/缩小更新步长。
+    dpo_loss = -F.logsigmoid(beta * margin).mean() / beta
     return dpo_loss, margin.detach().mean()
 
 
