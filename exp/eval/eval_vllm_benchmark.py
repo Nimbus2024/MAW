@@ -273,12 +273,28 @@ def select_answer(assistant_response, option_values):
     return normalized_options[similarities.index(max(similarities))]
 
 
-def is_correct_fuzzy(assistant_response, options, correct_answer):
-    """True if the response most closely matches the correct option (difflib)."""
+def is_correct_fuzzy(assistant_response, options, correct_answer, floor=0.3):
+    """Fuzzy classification: closest option (difflib) counts as correct.
+
+    If even the best match is below ``floor`` the model gave no clear option
+    answer (refusal/garbage), so credit a uniform random choice instead of
+    forcing an argmax.
+    """
     if not options or correct_answer is None:
         return False
-    selected = select_answer(assistant_response, options)
-    return selected.casefold() == " ".join(str(correct_answer).split()).casefold()
+    response = " ".join(str(assistant_response).split()).casefold()
+    if not response:
+        return False
+    normalized_options = [" ".join(str(value).split()) for value in options]
+    similarities = [
+        difflib.SequenceMatcher(None, response, value.casefold()).ratio()
+        for value in normalized_options
+    ]
+    correct_norm = " ".join(str(correct_answer).split()).casefold()
+    if max(similarities) < floor:
+        return random.choice(normalized_options).casefold() == correct_norm
+    selected = normalized_options[similarities.index(max(similarities))]
+    return selected.casefold() == correct_norm
 
 
 def answer_contains_correct_option(assistant_response, correct_answer):
