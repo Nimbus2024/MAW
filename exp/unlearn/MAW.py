@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 import json
 import random
+import math
 import argparse
 from torch.utils.tensorboard import SummaryWriter
 
@@ -435,8 +436,8 @@ def main(args):
         accelerator.prepare(model, ref_model, optimizer, dl_forget,
                             dl_retain, lr_scheduler)
 
-    # Start from the desired VQA lead so the controller begins at gamma0.
-    gap_ema = args.target_gap
+    # M0 = gap 的 EMA, 从 0 开始
+    gap_ema = 0.0
 
     # ═══════════════════════════════════════════════════
     # 训练循环
@@ -461,22 +462,20 @@ def main(args):
             loss_uni, M_uni = compute_forget_dpo_loss(
                 model, ref_model, batch_um["batch_w"], batch_um["batch_l"], beta=args.beta)
 
-            # ── Dynamic gamma from the global, smoothed absolute gap ──
-            # gamma is a controller weight, not part of the loss. Margins M_* are
-            # already detached and the whole block runs under no_grad, producing
-            # plain floats, so backward flows only through loss_mul/loss_uni.
+            # ── Dynamic gamma = sigmoid(gap − gap_ema) ──
+            # M0 = gap 的 EMA(ρ)；γ∈(0,1)。Margins detached, block under no_grad,
+            # backward 只经 (1−γ)L_mul + γL_uni。
             with torch.no_grad():
                 M_mul = accelerator.reduce(M_mul, reduction="mean")
                 M_uni = accelerator.reduce(M_uni, reduction="mean")
                 gap = float(M_mul - M_uni)
+                gamma = 1.0 / (1.0 + math.exp(-(gap - gap_ema)))
                 gap_ema = args.rho * gap_ema + (1.0 - args.rho) * gap
-                raw_gamma = args.gamma0 + args.gamma_gain * (gap_ema - args.target_gap)
-                gamma = float(min(args.gamma_max, max(args.gamma_min, raw_gamma)))
             m_mul = float(M_mul)
             m_uni = float(M_uni)
 
-            # ── Forget backward ──
-            loss_forget = loss_mul + gamma * loss_uni
+            # ── Forget backward: 模态间插值 ──
+            loss_forget = (1.0 - gamma) * loss_mul + gamma * loss_uni
             accelerator.backward(loss_forget)
             step_log["l_mul"] = loss_mul.item()
             step_log["l_uni"] = loss_uni.item()
@@ -566,11 +565,6 @@ def main(args):
     ema_state = {
         "gap_ema_final": gap_ema.item() if hasattr(gap_ema, 'item') else float(gap_ema),
         "rho": args.rho,
-        "target_gap": args.target_gap,
-        "gamma0": args.gamma0,
-        "gamma_gain": args.gamma_gain,
-        "gamma_min": args.gamma_min,
-        "gamma_max": args.gamma_max,
     }
     if accelerator.is_main_process:
         with open(os.path.join(args.config_dir, "controller_state.json"), "w") as f:
@@ -609,17 +603,9 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=0.4, help="DPO temperature")
     parser.add_argument("--lora_r", type=int, default=8, help="LoRA rank (default 8)")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha (default 16)")
-    # Dynamic gamma
-    parser.add_argument("--gamma0", type=float, default=0.25,
-                        help="Base unimodal loss weight")
-    parser.add_argument("--target_gap", type=float, default=1.0,
-                        help="Allowed EMA margin lead for VQA over QA")
-    parser.add_argument("--gamma_gain", type=float, default=0.15,
-                        help="QA-weight increase per gap unit beyond target_gap")
-    parser.add_argument("--gamma_min", type=float, default=0.2)
-    parser.add_argument("--gamma_max", type=float, default=0.6)
+    # Dynamic gamma: γ = σ(gap − gap_ema), gap_ema 用 --rho 平滑
     parser.add_argument("--rho", type=float, default=0.8,
-                        help="EMA smoothing coefficient for the global margin gap")
+                        help="EMA smoothing coefficient for the margin gap (M0)")
     # Retain
     parser.add_argument("--lmbda", type=float, default=0.0,
                         help="Retain KL weight (v1: 0.0, v2: >0.0)")
@@ -628,8 +614,6 @@ if __name__ == "__main__":
         parser.error("--rho must be in [0, 1)")
     if args.num_epochs < 1:
         parser.error("--num_epochs must be at least 1")
-    if args.gamma_min > args.gamma_max:
-        parser.error("--gamma_min must not exceed --gamma_max")
 
     # ── Structured run directory (AGENTS: results/<label>/<timestamp>/) ──
     timestamp = time.strftime("%Y%m%d_%H%M%S")
