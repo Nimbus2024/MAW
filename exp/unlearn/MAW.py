@@ -469,7 +469,7 @@ def main(args):
                 M_mul = accelerator.reduce(M_mul, reduction="mean")
                 M_uni = accelerator.reduce(M_uni, reduction="mean")
                 gap = float(M_mul - M_uni)
-                gamma = 1.0 / (1.0 + math.exp(-(gap - gap_ema)))
+                gamma = 1.0 / (1.0 + math.exp(-(args.alpha * (gap - gap_ema))))
                 gap_ema = args.rho * gap_ema + (1.0 - args.rho) * gap
             m_mul = float(M_mul)
             m_uni = float(M_uni)
@@ -603,9 +603,11 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=0.4, help="DPO temperature")
     parser.add_argument("--lora_r", type=int, default=8, help="LoRA rank (default 8)")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha (default 16)")
-    # Dynamic gamma: γ = σ(gap − gap_ema), gap_ema 用 --rho 平滑
+    # Dynamic gamma: γ = σ(α·(gap − gap_ema)), gap_ema 用 --rho 平滑(M0)
     parser.add_argument("--rho", type=float, default=0.8,
                         help="EMA smoothing coefficient for the margin gap (M0)")
+    parser.add_argument("--alpha", type=float, default=1.0,
+                        help="scale coefficient for (M-M0) inside sigmoid")
     # Retain
     parser.add_argument("--lmbda", type=float, default=0.0,
                         help="Retain KL weight (v1: 0.0, v2: >0.0)")
