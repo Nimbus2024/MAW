@@ -348,7 +348,7 @@ def classification_jobs(path, mode, forget_file, args):
                 jobs.append(Job(
                     question=f"{item['Question']}\nSelect answer in {options}",
                     image=image if question_type == "Image_Textual" else None,
-                    metadata={"type": question_type, "correct": correct,
+                    metadata={"type": question_type, "correct": correct, "options": options,
                               "row": row_idx, "qid": qid},
                 ))
                 qid += 1
@@ -388,7 +388,8 @@ def evaluate_classification(backend, path, mode, forget_file, args):
     for job, answer in zip(jobs, answers):
         kind = job.metadata["type"]
         totals[kind] += 1
-        correct[kind] += int(benchmark.answer_contains_correct_option(answer, job.metadata["correct"]))
+        correct[kind] += int(benchmark.is_correct_fuzzy(
+            answer, job.metadata["options"], job.metadata["correct"]))
     result = {
         "Image-Textual Question Accuracy": 100 * correct["Image_Textual"] / totals["Image_Textual"] if totals["Image_Textual"] else 0,
         "Pure Text Question Accuracy": 100 * correct["Pure_Text"] / totals["Pure_Text"] if totals["Pure_Text"] else 0,
@@ -397,7 +398,8 @@ def evaluate_classification(backend, path, mode, forget_file, args):
     }
     pairs = _paired_correct(
         jobs, answers,
-        lambda job, ans: benchmark.answer_contains_correct_option(ans, job.metadata["correct"]))
+        lambda job, ans: benchmark.is_correct_fuzzy(
+            ans, job.metadata["options"], job.metadata["correct"]))
     all_acc, all_err = _all_acc_err(pairs)
     if all_acc is not None:
         result["All Modal Question Accuracy"] = all_acc

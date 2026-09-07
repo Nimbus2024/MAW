@@ -273,6 +273,14 @@ def select_answer(assistant_response, option_values):
     return normalized_options[similarities.index(max(similarities))]
 
 
+def is_correct_fuzzy(assistant_response, options, correct_answer):
+    """True if the response most closely matches the correct option (difflib)."""
+    if not options or correct_answer is None:
+        return False
+    selected = select_answer(assistant_response, options)
+    return selected.casefold() == " ".join(str(correct_answer).split()).casefold()
+
+
 def answer_contains_correct_option(assistant_response, correct_answer):
     """Return whether the correct option text occurs in the raw response."""
     response = " ".join(str(assistant_response).split()).casefold()
