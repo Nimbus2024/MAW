@@ -171,7 +171,7 @@ HEAD_PM = ("\\multirow{3}{*}{Run} & \\multicolumn{6}{c}{Forget}"
            " \\cmidrule(lr){8-9} \\cmidrule(lr){10-11} \\cmidrule(lr){12-13}"
            " \\cmidrule(lr){14-15} \\cmidrule(lr){16-17} \\cmidrule(lr){18-19}\n"
            " & IT & PT & IT & PT & IT & PT & IT & PT & IT & PT"
-           " & IT & PT & IT & PT & IT & PT \\\\")
+           " & IT & PT & IT & PT & IT & PT & IT & PT \\\\")
 
 
 def agg_cells(run_entry):
