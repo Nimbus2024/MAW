@@ -474,8 +474,8 @@ def main(args):
             m_mul = float(M_mul)
             m_uni = float(M_uni)
 
-            # ── Forget backward: 模态间插值 ──
-            loss_forget = (1.0 - gamma) * loss_mul + gamma * loss_uni
+            # ── Forget backward: 模态间插值(γ 平衡时两系数=1/2, ×2 保持量级) ──
+            loss_forget = 2.0 * ((1.0 - gamma) * loss_mul + gamma * loss_uni)
             accelerator.backward(loss_forget)
             step_log["l_mul"] = loss_mul.item()
             step_log["l_uni"] = loss_uni.item()
