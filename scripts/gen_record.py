@@ -172,6 +172,37 @@ HEAD_PM = ("\\multirow{3}{*}{Run} & \\multicolumn{6}{c}{Forget}"
            " \\cmidrule(lr){14-15} \\cmidrule(lr){16-17} \\cmidrule(lr){18-19}\n"
            " & IT & PT & IT & PT & IT & PT & IT & PT & IT & PT"
            " & IT & PT & IT & PT & IT & PT & IT & PT \\\\")
+HEAD_AGG_EP = ("\\multirow{2}{*}{Timestamp} & \\multirow{2}{*}{Epoch}"
+               " & \\multicolumn{3}{c}{Forget}"
+               " & \\multicolumn{3}{c}{Retain} & \\multicolumn{3}{c}{Real} \\\\\n"
+               "\\cmidrule(lr){3-5} \\cmidrule(lr){6-8} \\cmidrule(lr){9-11}\n"
+               " & & Fill($\\downarrow$) & Classif($\\downarrow$) & Gen($\\downarrow$)"
+               " & Fill($\\uparrow$) & Classif($\\uparrow$) & Gen($\\uparrow$)"
+               " & Fill($\\uparrow$) & Classif($\\uparrow$) & Gen($\\uparrow$) \\\\")
+HEAD_PM_EP = ("\\multirow{3}{*}{Timestamp} & \\multirow{3}{*}{Epoch}"
+              " & \\multicolumn{6}{c}{Forget}"
+              " & \\multicolumn{6}{c}{Retain} & \\multicolumn{6}{c}{Real} \\\\\n"
+              "\\cmidrule(lr){3-8} \\cmidrule(lr){9-14} \\cmidrule(lr){15-20}\n"
+              " & & \\multicolumn{2}{c}{Fill} & \\multicolumn{2}{c}{Classif}"
+              " & \\multicolumn{2}{c}{Gen}"
+              " & \\multicolumn{2}{c}{Fill} & \\multicolumn{2}{c}{Classif}"
+              " & \\multicolumn{2}{c}{Gen}"
+              " & \\multicolumn{2}{c}{Fill} & \\multicolumn{2}{c}{Classif}"
+              " & \\multicolumn{2}{c}{Gen} \\\\\n"
+              "\\cmidrule(lr){3-4} \\cmidrule(lr){5-6} \\cmidrule(lr){7-8}"
+              " \\cmidrule(lr){9-10} \\cmidrule(lr){11-12} \\cmidrule(lr){13-14}"
+              " \\cmidrule(lr){15-16} \\cmidrule(lr){17-18} \\cmidrule(lr){19-20}\n"
+              " & & IT & PT & IT & PT & IT & PT & IT & PT & IT & PT"
+              " & IT & PT & IT & PT & IT & PT \\\\")
+
+METRIC_NOTE = ("\\noindent\\small\\emph{Metric definitions: per-task All(aggregate) 列 = "
+               "Fill/Classif: Forget 用 $(\\mathit{IT}+\\mathit{PT}+100-\\mathit{AllErr})/3$, "
+               "Retain 用 $(\\mathit{IT}+\\mathit{PT}+\\mathit{AllAcc})/3$, Real 取 $\\mathit{AllAcc}$; "
+               "其中 AllAcc/AllErr = All Modal Question Accuracy/Error(配对双模态均对/均错占比)。"
+               "Gen 的 All 直接取后端 All Modal Average ROUGE-L"
+               "(IT/PT 配对: Forget $(\\mathit{IT}^2+\\mathit{PT}^2)/(\\mathit{IT}+\\mathit{PT})$, "
+               "Retain/Real $2\\,\\mathit{IT}\\,\\mathit{PT}/(\\mathit{IT}+\\mathit{PT})$)。"
+               "Forget 越低越好, Retain/Real 越高越好.}")
 
 
 def agg_cells(run_entry):
@@ -193,15 +224,30 @@ def pm_cells(run_entry):
     return " & ".join(cells)
 
 
+def _epoch_of(entry):
+    m = re.search(r"\(epoch (\d+)\)", entry[0])
+    return m.group(1) if m else None
+
+
 def metric_table(run_rows, header, cells_fn, ncols):
+    """逐 run/epoch 指标表: 首列为 Timestamp(组内首行显示), 次列 Epoch。"""
+    groups = []
+    for e in run_rows:
+        ts = os.path.basename(e[1])
+        if groups and groups[-1][0] == ts:
+            groups[-1][1].append(e)
+        else:
+            groups.append([ts, [e]])
     lines = [
         "\\begin{table}[H]", "\\centering", "\\resizebox{\\linewidth}{!}{%",
-        "\\begin{tabular}{l" + "c" * ncols + "}", "\\toprule",
+        "\\begin{tabular}{ll" + "c" * ncols + "}", "\\toprule",
         header, "\\midrule",
     ]
-    for run in run_rows:
-        name = run[0]
-        lines.append(f"\\textbf{{{esc(name)}}} & {cells_fn(run)} \\\\")
+    for ts, es in groups:
+        for i, run in enumerate(es):
+            ts_cell = f"\\textbf{{{esc(ts)}}}" if i == 0 else ""
+            ep = _epoch_of(run) or ""
+            lines.append(f"{ts_cell} & {ep} & {cells_fn(run)} \\\\")
     lines += ["\\bottomrule", "\\end{tabular}", "}", "\\end{table}"]
     return "\n".join(lines)
 
@@ -210,18 +256,26 @@ def hyper_table(entries):
     def scalar(v):
         return v is not None and not isinstance(v, (dict, list))
 
-    cfgs = [e[2] for e in entries]
+    by_ts = {}
+    for e in entries:
+        by_ts.setdefault(os.path.basename(e[1]), e)
+    run_entries = [by_ts[k] for k in sorted(by_ts)]
+    cfgs = [e[2] for e in run_entries]
     cols = []
     for c in cfgs:
         for k, v in c.items():
-            if k not in cols and scalar(v) and all(scalar(cc.get(k)) for cc in cfgs):
+            is_path = isinstance(v, str) and v.startswith("/")
+            if k not in cols and scalar(v) and not is_path and \
+                    all(scalar(cc.get(k)) and not (isinstance(cc.get(k), str)
+                                                    and cc.get(k).startswith("/"))
+                        for cc in cfgs):
                 cols.append(k)
     if not cols:
         cols = ["(no scalar hyperparameters)"]
     body = []
-    for e in entries:
+    for e in run_entries:
         cfg = e[2]
-        row = [f"\\textbf{{{esc(e[0])}}}"]
+        row = [f"\\textbf{{{esc(os.path.basename(e[1]))}}}"]
         for k in cols:
             row.append(esc(cfg.get(k, "")))
         body.append(" & ".join(row) + " \\\\")
@@ -240,12 +294,12 @@ def label_section(label, entries):
         out += ["", "\\subsection{Hyperparameters}", "", hyper_table(entries), ""]
     out += [
         "", "\\subsection{Aggregate (All) scores}", "",
-        metric_table(entries, HEAD_AGG, agg_cells, 9),
-        "\\noindent\\small\\emph{Metric definitions: Aggregate = mean of IT and PT; "
-        "forget lower is better, retain/real higher is better.}",
+        metric_table(entries, HEAD_AGG_EP, agg_cells, 9),
+        METRIC_NOTE,
         "", "\\subsection{Per-modal (IT / PT) scores}", "",
-        metric_table(entries, HEAD_PM, pm_cells, 18),
-        "\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text.}"]
+        metric_table(entries, HEAD_PM_EP, pm_cells, 18),
+        "\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text; "
+        "All 列公式见上.}"]
     return "\n".join(out)
 
 
@@ -301,6 +355,9 @@ def main():
     ap.add_argument("--root", default="../product")
     ap.add_argument("--out", default="UMU-Bench_实验记录.tex")
     ap.add_argument("--labels", default="", help="逗号分隔; 空=全部")
+    ap.add_argument("--pick", default="",
+                    help="Overview 每 label 选定的代表 run, 逗号分隔 label=ts[@epoch]; "
+                         "如 MAW=20260907_154223@8")
     args = ap.parse_args()
 
     results_root = os.path.join(args.root, "results")
@@ -323,6 +380,26 @@ def main():
         "",
     ]
     ov = build_overview(results_root)
+
+    def _find_entry(entries, ts, epoch):
+        for e in entries:
+            if e[0].startswith(ts):
+                if epoch is None or f"(epoch {epoch})" in e[0]:
+                    return e
+        return None
+
+    for part in (x.strip() for x in args.pick.split(",") if x.strip()):
+        label, _, rest = part.partition("=")
+        ts, _, ep = rest.partition("@")
+        if not os.path.isdir(os.path.join(results_root, label)):
+            continue
+        hit = _find_entry(collect_runs(os.path.join(results_root, label)), ts,
+                          int(ep) if ep else None)
+        if hit is not None:
+            ov[label] = hit
+            print(f"pick: {label} -> {hit[0]}")
+        else:
+            print(f"pick: {label} 未匹配 {ts}@{ep}, 保留默认")
     # Overview: 每 label 一行(行名=label), 仅收录最新 run 有有效 metrics 的 label
     ov_rows = []
     for label, entry in ov.items():
@@ -334,9 +411,14 @@ def main():
     pm_cols = [(g, t, m) for g in GROUPS for t in TASKS for m in ("IT", "PT")]
     doc.append(overview_table(ov_rows, method_head(HEAD_AGG), 9, agg_cols))
     doc.append("")
+    doc.append(METRIC_NOTE)
+    doc.append("")
     doc.append("\\subsection*{Per-modal (IT / PT) scores}")
     doc.append("")
     doc.append(overview_table(ov_rows, method_head(HEAD_PM), 18, pm_cols))
+    doc.append("")
+    doc.append("\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text; "
+               "green = best value, red = worst value per column.}")
     doc.append("")
     for label in labels:
         entries = collect_runs(os.path.join(results_root, label))
