@@ -192,8 +192,8 @@ HEAD_PM_EP = ("Timestamp & Epoch"
               "\\cmidrule(lr){3-4} \\cmidrule(lr){5-6} \\cmidrule(lr){7-8}"
               " \\cmidrule(lr){9-10} \\cmidrule(lr){11-12} \\cmidrule(lr){13-14}"
               " \\cmidrule(lr){15-16} \\cmidrule(lr){17-18} \\cmidrule(lr){19-20}\n"
-              " & & IT & PT & IT & PT & IT & PT & IT & PT & IT & PT"
-              " & IT & PT & IT & PT & IT & PT \\\\")
+               " & & IT & PT & IT & PT & IT & PT & IT & PT & IT & PT"
+               " & IT & PT & IT & PT & IT & PT & IT & PT \\\\")
 
 METRIC_NOTE = ("\\noindent\\small\\emph{Metric definitions: per-task All(aggregate) 列 = "
                "Fill/Classif: Forget 用 $(\\mathit{IT}+\\mathit{PT}+100-\\mathit{AllErr})/3$, "
