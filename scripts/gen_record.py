@@ -205,32 +205,13 @@ METRIC_NOTE = ("\\noindent\\small\\emph{Metric definitions: per-task All(aggrega
                "Forget 越低越好, Retain/Real 越高越好.}")
 
 
-def agg_cells(run_entry):
-    data = parse_final(run_entry[3])
-    cells = []
-    for group in ("Forget", "Retain", "Real"):
-        for task in ("Fill", "Classif", "Gen"):
-            cells.append(scope_cell(data, group, task, "All"))
-    return " & ".join(cells)
-
-
-def pm_cells(run_entry):
-    data = parse_final(run_entry[3])
-    cells = []
-    for group in ("Forget", "Retain", "Real"):
-        for task in ("Fill", "Classif", "Gen"):
-            for modal in ("IT", "PT"):
-                cells.append(scope_cell(data, group, task, modal))
-    return " & ".join(cells)
-
-
 def _epoch_of(entry):
     m = re.search(r"\(epoch (\d+)\)", entry[0])
     return m.group(1) if m else None
 
 
-def metric_table(run_rows, header, cells_fn, ncols):
-    """逐 run/epoch 指标表: longtable 跨页自动断表并重复表头。"""
+def metric_table(run_rows, header, colspec):
+    """逐 run/epoch 指标表: longtable 跨页, 每列最优标绿/最差标红。"""
     groups = []
     for e in run_rows:
         ts = os.path.basename(e[1])
@@ -238,12 +219,35 @@ def metric_table(run_rows, header, cells_fn, ncols):
             groups[-1][1].append(e)
         else:
             groups.append([ts, [e]])
+    rows = [e for _, es in groups for e in es]
+    best, worst = {}, {}
+    for ci, (g, t, m) in enumerate(colspec):
+        nums = []
+        for r in rows:
+            v = _cell_value(r, g, t, m)
+            if v is not None:
+                nums.append((r, v))
+        if not nums:
+            continue
+        high = g != "Forget"
+        best[ci] = (max if high else min)(nums, key=lambda x: x[1])[0]
+        worst[ci] = (min if high else max)(nums, key=lambda x: x[1])[0]
     body = []
     for ts, es in groups:
         for i, run in enumerate(es):
             ts_cell = f"\\textbf{{{esc(ts)}}}" if i == 0 else ""
             ep = _epoch_of(run) or ""
-            body.append(f"{ts_cell} & {ep} & {cells_fn(run)} \\\\")
+            cells = []
+            for ci, (g, t, m) in enumerate(colspec):
+                s = _fmt_val(t, _cell_value(run, g, t, m))
+                if s:
+                    if best.get(ci) is run:
+                        s = f"\\textcolor{{umugreen}}{{{s}}}"
+                    elif worst.get(ci) is run:
+                        s = f"\\textcolor{{umured}}{{{s}}}"
+                cells.append(s)
+            body.append(f"{ts_cell} & {ep} & " + " & ".join(cells) + " \\\\")
+    ncols = len(colspec)
     return ("{\\footnotesize\\setlength{\\tabcolsep}{1.5pt}\n"
             "\\begin{longtable}{ll" + "c" * ncols + "}\n"
             "\\toprule\n" + header + "\n\\midrule\n"
@@ -296,10 +300,10 @@ def label_section(label, entries):
         out += ["", "\\subsection{Hyperparameters}", "", hyper_table(entries), ""]
     out += [
         "", "\\subsection{Aggregate (All) scores}", "",
-        metric_table(entries, HEAD_AGG_EP, agg_cells, 9),
+        metric_table(entries, HEAD_AGG_EP, AGG_COLSPEC),
         METRIC_NOTE,
         "", "\\subsection{Per-modal (IT / PT) scores}", "",
-        metric_table(entries, HEAD_PM_EP, pm_cells, 18),
+        metric_table(entries, HEAD_PM_EP, PM_COLSPEC),
         "\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text; "
         "All 列公式见上.}"]
     return "\n".join(out)
@@ -307,6 +311,8 @@ def label_section(label, entries):
 
 GROUPS = ("Forget", "Retain", "Real")
 TASKS = ("Fill", "Classif", "Gen")
+AGG_COLSPEC = [(g, t, "All") for g in GROUPS for t in TASKS]
+PM_COLSPEC = [(g, t, m) for g in GROUPS for t in TASKS for m in ("IT", "PT")]
 
 
 def _cell_value(entry, g, t, m):
@@ -410,8 +416,8 @@ def main():
             continue
         ov_rows.append((label,) + entry[1:])
     method_head = lambda h: h.replace("Run}", "Method}")
-    agg_cols = [(g, t, "All") for g in GROUPS for t in TASKS]
-    pm_cols = [(g, t, m) for g in GROUPS for t in TASKS for m in ("IT", "PT")]
+    agg_cols = AGG_COLSPEC
+    pm_cols = PM_COLSPEC
     doc.append(overview_table(ov_rows, method_head(HEAD_AGG), 9, agg_cols))
     doc.append("")
     doc.append(METRIC_NOTE)
