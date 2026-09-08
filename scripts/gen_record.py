@@ -172,14 +172,14 @@ HEAD_PM = ("\\multirow{3}{*}{Run} & \\multicolumn{6}{c}{Forget}"
            " \\cmidrule(lr){14-15} \\cmidrule(lr){16-17} \\cmidrule(lr){18-19}\n"
            " & IT & PT & IT & PT & IT & PT & IT & PT & IT & PT"
            " & IT & PT & IT & PT & IT & PT & IT & PT \\\\")
-HEAD_AGG_EP = ("\\multirow{2}{*}{Timestamp} & \\multirow{2}{*}{Epoch}"
+HEAD_AGG_EP = ("Timestamp & Epoch"
                " & \\multicolumn{3}{c}{Forget}"
                " & \\multicolumn{3}{c}{Retain} & \\multicolumn{3}{c}{Real} \\\\\n"
                "\\cmidrule(lr){3-5} \\cmidrule(lr){6-8} \\cmidrule(lr){9-11}\n"
                " & & Fill($\\downarrow$) & Classif($\\downarrow$) & Gen($\\downarrow$)"
                " & Fill($\\uparrow$) & Classif($\\uparrow$) & Gen($\\uparrow$)"
                " & Fill($\\uparrow$) & Classif($\\uparrow$) & Gen($\\uparrow$) \\\\")
-HEAD_PM_EP = ("\\multirow{3}{*}{Timestamp} & \\multirow{3}{*}{Epoch}"
+HEAD_PM_EP = ("Timestamp & Epoch"
               " & \\multicolumn{6}{c}{Forget}"
               " & \\multicolumn{6}{c}{Retain} & \\multicolumn{6}{c}{Real} \\\\\n"
               "\\cmidrule(lr){3-8} \\cmidrule(lr){9-14} \\cmidrule(lr){15-20}\n"
@@ -230,7 +230,7 @@ def _epoch_of(entry):
 
 
 def metric_table(run_rows, header, cells_fn, ncols):
-    """逐 run/epoch 指标表: 首列为 Timestamp(组内首行显示), 次列 Epoch。"""
+    """逐 run/epoch 指标表: longtable 跨页自动断表并重复表头。"""
     groups = []
     for e in run_rows:
         ts = os.path.basename(e[1])
@@ -238,18 +238,20 @@ def metric_table(run_rows, header, cells_fn, ncols):
             groups[-1][1].append(e)
         else:
             groups.append([ts, [e]])
-    lines = [
-        "\\begin{table}[H]", "\\centering", "\\resizebox{\\linewidth}{!}{%",
-        "\\begin{tabular}{ll" + "c" * ncols + "}", "\\toprule",
-        header, "\\midrule",
-    ]
+    body = []
     for ts, es in groups:
         for i, run in enumerate(es):
             ts_cell = f"\\textbf{{{esc(ts)}}}" if i == 0 else ""
             ep = _epoch_of(run) or ""
-            lines.append(f"{ts_cell} & {ep} & {cells_fn(run)} \\\\")
-    lines += ["\\bottomrule", "\\end{tabular}", "}", "\\end{table}"]
-    return "\n".join(lines)
+            body.append(f"{ts_cell} & {ep} & {cells_fn(run)} \\\\")
+    return ("{\\footnotesize\\setlength{\\tabcolsep}{2.5pt}\n"
+            "\\begin{longtable}{ll" + "c" * ncols + "}\n"
+            "\\toprule\n" + header + "\n\\midrule\n"
+            "\\endfirsthead\n"
+            "\\toprule\n" + header + "\n\\midrule\n"
+            "\\endhead\n"
+            + "\n".join(body) + "\n"
+            "\\bottomrule\n\\end{longtable}\n}")
 
 
 def hyper_table(entries):
@@ -370,6 +372,7 @@ def main():
         "\\documentclass{article}",
         "\\usepackage[UTF8]{ctex}",   # 中文(标题/说明), 建议 xelatex 编译
         "\\usepackage{booktabs}", "\\usepackage{tabularx}",
+        "\\usepackage{longtable}",
         "\\usepackage{multirow}", "\\usepackage{graphicx}",
         "\\usepackage{float}", "\\usepackage[table]{xcolor}",
         "\\definecolor{umugreen}{HTML}{228B22}", "\\definecolor{umured}{HTML}{B22222}",
