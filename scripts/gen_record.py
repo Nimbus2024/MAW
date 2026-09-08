@@ -244,7 +244,7 @@ def metric_table(run_rows, header, cells_fn, ncols):
             ts_cell = f"\\textbf{{{esc(ts)}}}" if i == 0 else ""
             ep = _epoch_of(run) or ""
             body.append(f"{ts_cell} & {ep} & {cells_fn(run)} \\\\")
-    return ("{\\footnotesize\\setlength{\\tabcolsep}{2.5pt}\n"
+    return ("{\\footnotesize\\setlength{\\tabcolsep}{1.5pt}\n"
             "\\begin{longtable}{ll" + "c" * ncols + "}\n"
             "\\toprule\n" + header + "\n\\midrule\n"
             "\\endfirsthead\n"
