@@ -210,20 +210,11 @@ def _epoch_of(entry):
     return m.group(1) if m else None
 
 
-def metric_table(run_rows, header, colspec):
-    """逐 run/epoch 指标表: longtable 跨页, 每列最优标绿/最差标红。"""
-    groups = []
-    for e in run_rows:
-        ts = os.path.basename(e[1])
-        if groups and groups[-1][0] == ts:
-            groups[-1][1].append(e)
-        else:
-            groups.append([ts, [e]])
-    rows = [e for _, es in groups for e in es]
+def _best_worst(es, colspec):
     best, worst = {}, {}
     for ci, (g, t, m) in enumerate(colspec):
         nums = []
-        for r in rows:
+        for r in es:
             v = _cell_value(r, g, t, m)
             if v is not None:
                 nums.append((r, v))
@@ -232,8 +223,21 @@ def metric_table(run_rows, header, colspec):
         high = g != "Forget"
         best[ci] = (max if high else min)(nums, key=lambda x: x[1])[0]
         worst[ci] = (min if high else max)(nums, key=lambda x: x[1])[0]
+    return best, worst
+
+
+def metric_table(run_rows, header, colspec):
+    """逐 run/epoch 指标表: longtable 跨页; 每个 timestamp 组内各自维护最优/最差标色。"""
+    groups = []
+    for e in run_rows:
+        ts = os.path.basename(e[1])
+        if groups and groups[-1][0] == ts:
+            groups[-1][1].append(e)
+        else:
+            groups.append([ts, [e]])
     body = []
     for ts, es in groups:
+        best, worst = _best_worst(es, colspec)
         for i, run in enumerate(es):
             ts_cell = f"\\textbf{{{esc(ts)}}}" if i == 0 else ""
             ep = _epoch_of(run) or ""
