@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""simNPO.py — Simplified NPO (无参考模型, 长度归一化) unlearning。
+"""simNPO.py — NPO unlearning (参考模型 log-ratio, 对齐官方实现)。
 
 损失(在 forget 多模态 ∪ 单模态上, 每样本):
-    r(x, y) = (1/|y|) * Σ_t log π_θ(y_t | x, y_<t)     (仅答案 token, labels≠-100)
+    r(x, y) = (1/|y|) * Σ_t [log π_θ(y_t|x,y_<t) - log π_ref(y_t|x,y_<t)]
     L = -E_{(x,y)}[ (2/β) * log σ( -β·r(x,y) - γ ) ]
 
-单模型: policy = origin(SFT/llava_smu_ft) + LoRA; 无参考模型, 无 retain 项。
+policy = origin(SFT/llava_smu_ft) + LoRA; ref = 冻结的 origin。单模态项乘 alpha。
 逐 epoch 保存到 <run>/runs/<epoch>/model, 最终 <run>/model 为末 epoch 软链。
 """
 import os
@@ -39,16 +39,20 @@ from .unlearn_dataset import (
 )
 
 
-def load_model_and_processor(args):
-    if not _paths.is_llava(args.model_id):
-        raise ValueError("仅支持 LLaVA 族模型")
+def _load_llava(args):
     load_kwargs = dict(torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
                        local_files_only=True)
     if "LOCAL_RANK" in os.environ:
         load_kwargs["device_map"] = {"": int(os.environ["LOCAL_RANK"])}
     else:
         load_kwargs["device_map"] = "auto"
-    model = LlavaForConditionalGeneration.from_pretrained(args.vanilla_dir, **load_kwargs)
+    return LlavaForConditionalGeneration.from_pretrained(args.vanilla_dir, **load_kwargs)
+
+
+def load_model_and_processor(args):
+    if not _paths.is_llava(args.model_id):
+        raise ValueError("仅支持 LLaVA 族模型")
+    model = _load_llava(args)
     proc_dir = args.processor_dir if args.processor_dir else args.model_id
     processor = AutoProcessor.from_pretrained(proc_dir, local_files_only=True)
     processor.num_additional_image_tokens = 1
@@ -57,17 +61,30 @@ def load_model_and_processor(args):
     return model, processor
 
 
-def compute_simnpo_loss(model, input_ids, attention_mask, pixel_values, labels,
-                        beta, gamma):
+def load_reference_model(args):
+    ref_model = _load_llava(args)
+    ref_model.eval()
+    ref_model.requires_grad_(False)
+    return ref_model
+
+
+def compute_simnpo_loss(model, ref_model, input_ids, attention_mask, pixel_values,
+                        labels, beta, gamma):
     outputs = model(input_ids=input_ids, attention_mask=attention_mask,
                     pixel_values=pixel_values)
     lp = _sequence_logprob(outputs.logits, labels, normalize=True)
-    return -(2.0 / beta) * F.logsigmoid(-beta * lp - gamma)
+    with torch.no_grad():
+        ref_outputs = ref_model(input_ids=input_ids, attention_mask=attention_mask,
+                                pixel_values=pixel_values)
+        lp_ref = _sequence_logprob(ref_outputs.logits, labels, normalize=True)
+    ratio = lp - lp_ref
+    return -(2.0 / beta) * F.logsigmoid(-beta * ratio - gamma), ratio.detach().mean()
 
 
 def main(args):
     set_global_seed(42)
     model, processor = load_model_and_processor(args)
+    ref_model = load_reference_model(args)
 
     lora_config = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.05,
@@ -110,23 +127,29 @@ def main(args):
         for pair in bar:
             mm, um = pair["mm"], pair["um"]
             input_ids, attn, pixel, labels = mm
-            loss_mm = compute_simnpo_loss(model, input_ids, attn, pixel, labels,
-                                          args.beta, args.gamma).mean()
-            accelerator.backward(0.5 * loss_mm)
+            loss_mm, ratio_mm = compute_simnpo_loss(
+                model, ref_model, input_ids, attn, pixel, labels,
+                args.beta, args.gamma)
+            loss_mm = loss_mm.mean()
+            accelerator.backward(loss_mm)
             input_ids_u, attn_u, _, labels_u = um
-            loss_um = compute_simnpo_loss(model, input_ids_u, attn_u, None, labels_u,
-                                          args.beta, args.gamma).mean()
-            accelerator.backward(0.5 * loss_um)
+            loss_um, ratio_um = compute_simnpo_loss(
+                model, ref_model, input_ids_u, attn_u, None, labels_u,
+                args.beta, args.gamma)
+            loss_um = loss_um.mean()
+            accelerator.backward(args.alpha * loss_um)
             accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
             lr_scheduler.step()
-            loss = 0.5 * (loss_mm + loss_um)
+            loss = loss_mm + args.alpha * loss_um
             total_loss += loss.item()
             if writer is not None:
                 writer.add_scalar("Loss/train", loss.item(), global_step)
                 writer.add_scalar("Loss/mm", loss_mm.item(), global_step)
                 writer.add_scalar("Loss/um", loss_um.item(), global_step)
+                writer.add_scalar("ratio/mm", ratio_mm.item(), global_step)
+                writer.add_scalar("ratio/um", ratio_um.item(), global_step)
             global_step += 1
             bar.set_postfix(loss=loss.item())
             if args.max_steps is not None and global_step >= args.max_steps:
@@ -182,6 +205,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--beta", type=float, default=0.4)
     parser.add_argument("--gamma", type=float, default=0.0)
+    parser.add_argument("--alpha", type=float, default=1.0,
+                        help="单模态 forget 项权重")
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=32)
     args = parser.parse_args()
