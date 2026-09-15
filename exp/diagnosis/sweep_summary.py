@@ -27,7 +27,7 @@ def task_accuracy(metrics_dir: Path, epoch_name: str):
     data = json.loads(path.read_text(encoding="utf-8"))
     forget = data.get("Forget Set Results", {})
     fill = forget.get("fill_in_the_blank", {})
-    qa = forget.get("QA (MM_QA/UM_QA) Results", {})
+    qa = data.get("QA (MM_QA/UM_QA) Results", {})
     return {
         "fill_it": fill.get("image_textual_accuracy"),
         "fill_pt": fill.get("pure_text_accuracy"),
