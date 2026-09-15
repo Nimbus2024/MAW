@@ -36,7 +36,8 @@ BS="${BS:-16}"
 BETA="${BETA:-0.4}"
 LORA_R="${LORA_R:-8}"
 LORA_A="${LORA_A:-16}"
-TP_SIZE="${TP_SIZE:-2}"
+TP_SIZE="${TP_SIZE:-1}"
+TRAIN_GPU="${TRAIN_GPU:-0}"
 FORGET_RATIO="${FORGET_RATIO:-5}"
 EVAL_BATCH="${EVAL_BATCH:-32}"
 EVAL_LAST_N="${EVAL_LAST_N:-1}"
@@ -98,23 +99,22 @@ for alpha in ${ALPHAS}; do
   if [ "${METHOD}" = "MAW" ]; then
     (
       cd "${CODE_ROOT}"
-      "${PYTHON}" -m accelerate.commands.launch --num_processes "${NPROC}" \
-        -m exp.unlearn.MAW \
+      CUDA_VISIBLE_DEVICES="${TRAIN_GPU}" "${PYTHON}" -m exp.unlearn.MAW \
         --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
         --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
         --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
-        --num_epochs "${EPOCHS}" --beta "${BETA}" \
+        --num_epochs "${EPOCHS}" --beta "${BETA}" --gradient_checkpointing \
         --lora_r "${LORA_R}" --lora_alpha "${LORA_A}" ${EXTRA_ARGS}
     ) > "${RUN_DIR}/logs/stdout.log" 2>&1
   else
     (
       cd "${CODE_ROOT}"
-      "${PYTHON}" -m exp.unlearn.simNPO \
+      CUDA_VISIBLE_DEVICES="${TRAIN_GPU}" "${PYTHON}" -m exp.unlearn.simNPO \
         --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
         --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
         --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
         --num_epochs "${EPOCHS}" --beta "${BETA}" --gamma 0.0 --alpha "${alpha}" \
-        --lora_r "${LORA_R}" --lora_alpha "${LORA_A}" \
+        --lora_r "${LORA_R}" --lora_alpha "${LORA_A}" --gradient_checkpointing \
         --modality "${MODALITY}" --grad_log ${EXTRA_ARGS}
     ) > "${RUN_DIR}/logs/stdout.log" 2>&1
   fi
