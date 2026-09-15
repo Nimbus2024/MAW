@@ -198,7 +198,8 @@ def main(args):
     args.lora_target_modules = sorted(lora_config.target_modules)
     model = get_peft_model(model, lora_config)
     if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
         model.enable_input_require_grads()
     model.print_trainable_parameters()
 
