@@ -381,6 +381,9 @@ def main(args):
             json.dump(vars(args), f, indent=2, default=str)
     print("Applying LoRA...")
     model = get_peft_model(model, lora_config)
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
     model.print_trainable_parameters()
 
     # ── 冻结 π_ref ──
@@ -608,6 +611,8 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=0.4, help="DPO temperature")
     parser.add_argument("--lora_r", type=int, default=8, help="LoRA rank (default 8)")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha (default 16)")
+    parser.add_argument("--gradient_checkpointing", action="store_true",
+                        help="省显存: 开启梯度检查点")
     # Dynamic gamma: γ = σ(α·(gap − gap_ema)), gap_ema 用 --rho 平滑(M0)
     parser.add_argument("--rho", type=float, default=0.8,
                         help="EMA smoothing coefficient for the margin gap (M0)")

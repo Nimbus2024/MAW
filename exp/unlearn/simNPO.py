@@ -197,6 +197,9 @@ def main(args):
     args.lora_dropout = lora_config.lora_dropout
     args.lora_target_modules = sorted(lora_config.target_modules)
     model = get_peft_model(model, lora_config)
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
     model.print_trainable_parameters()
 
     if os.environ.get("LOCAL_RANK", "0") == "0":
@@ -360,6 +363,8 @@ if __name__ == "__main__":
                         help="单模态 forget 项权重")
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--gradient_checkpointing", action="store_true",
+                        help="省显存: 开启梯度检查点 (长序列/大 batch 必需)")
     parser.add_argument("--modality", choices=("both", "mm", "um"), default="both",
                         help="E1 模态隔离: both=联合; mm=仅视觉(IT) forget; um=仅文本(PT) forget")
     parser.add_argument("--grad_log", action="store_true",
