@@ -226,6 +226,8 @@ def main(args):
         num_training_steps=len(train_dataloader) * args.num_epochs)
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler)
+    if hasattr(model, "_set_static_graph"):
+        model._set_static_graph()
 
     do_mm = args.modality in ("both", "mm")
     do_um = args.modality in ("both", "um")
