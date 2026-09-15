@@ -49,7 +49,7 @@ eval_pretrain() {
     --data_split_folder "${DATA_SPLIT_DIR}" --task_data "${TASK_DATA}" \
     --test_data "${TASK_DATA}" --celebrity_data "${CELEB_DATA}" \
     --output_folder "${out}" --output_file "${name}" \
-    --forget_ratio "${FORGET_RATIO}" --scopes forget --dump_details \
+    --forget_ratio "${FORGET_RATIO}" --scopes forget,qa --dump_details \
     --batch_size "${EVAL_BATCH}" --tensor_parallel_size "${TP_SIZE}" --max_model_len 4096) \
     > "${out}/eval.log" 2>&1
 }
@@ -62,7 +62,7 @@ eval_adapter() {
     --data_split_folder "${DATA_SPLIT_DIR}" --task_data "${TASK_DATA}" \
     --test_data "${TASK_DATA}" --celebrity_data "${CELEB_DATA}" \
     --output_folder "${out}" --output_file "${name}" \
-    --forget_ratio "${FORGET_RATIO}" --scopes forget --dump_details \
+    --forget_ratio "${FORGET_RATIO}" --scopes forget,qa --dump_details \
     --batch_size "${EVAL_BATCH}" --tensor_parallel_size "${TP_SIZE}" --max_model_len 4096) \
     > "${out}/eval.log" 2>&1
 }
@@ -108,7 +108,7 @@ for alpha in ${ALPHAS}; do
     (
       cd "${CODE_ROOT}"
       "${PYTHON}" -m exp.diagnosis.stats \
-        --oracle_dir "${ORACLE_DIR}" --unlearned_dir "${METRICS_DIR}" \
+        --oracle_dir "${ORACLE_DIR}" --unlearned_dir "${METRICS_DIR}" --tasks qa,fill,classification \
         --label "${epoch_name}" \
         --output "${RUN_DIR}/diagnosis/${epoch_name}_stats.json"
     ) > "${RUN_DIR}/diagnosis/${epoch_name}_stats.log" 2>&1 || true

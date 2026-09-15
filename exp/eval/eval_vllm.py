@@ -497,6 +497,94 @@ def evaluate_fill(backend, path, mode, forget_file, args):
     return result
 
 
+def _qa_answer_text(value):
+    if isinstance(value, dict):
+        return " ".join(str(v) for v in value.values())
+    if isinstance(value, list):
+        return " ".join(str(v) for v in value)
+    return str(value)
+
+
+def qa_jobs(path, mode, forget_file, args):
+    jobs = []
+    for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
+        mm = row.get("MM_QA")
+        um = row.get("UM_QA")
+        mm = ast.literal_eval(mm) if isinstance(mm, str) else mm
+        um = ast.literal_eval(um) if isinstance(um, str) else um
+        if not isinstance(mm, dict) or not isinstance(um, dict):
+            continue
+        image = row_image(row, mode, args.image_noise_sigma)
+        mm_q, mm_a = mm.get("question", {}) or {}, mm.get("answer", {}) or {}
+        um_q, um_a = um.get("question", {}) or {}, um.get("answer", {}) or {}
+        per_kind = {"Image_Textual": 0, "Pure_Text": 0}
+        for key in mm_q:
+            jobs.append(Job(
+                question=str(mm_q[key]) + args.prompt_suffix,
+                image=image,
+                metadata={"type": "Image_Textual", "ground_truth": _qa_answer_text(mm_a.get(key, "")),
+                          "row": row_idx, "qid": per_kind["Image_Textual"], "image_id": row["ID"]},
+            ))
+            per_kind["Image_Textual"] += 1
+        for key in um_q:
+            jobs.append(Job(
+                question=str(um_q[key]) + args.prompt_suffix,
+                image=None,
+                metadata={"type": "Pure_Text", "ground_truth": _qa_answer_text(um_a.get(key, "")),
+                          "row": row_idx, "qid": per_kind["Pure_Text"], "image_id": row["ID"]},
+            ))
+            per_kind["Pure_Text"] += 1
+    return jobs
+
+
+def _judge_answer(generated, ground_truth):
+    import re
+
+    g = re.sub(r"[^a-z0-9]+", " ", generated.lower()).strip()
+    t = re.sub(r"[^a-z0-9]+", " ", str(ground_truth).lower()).strip()
+    if not g or not t:
+        return False
+    return g in t or t in g
+
+
+def evaluate_qa(backend, path, mode, forget_file, args):
+    jobs = qa_jobs(path, mode, forget_file, args)
+    answers = backend.generate(jobs, args.max_new_tokens)
+    totals = {"Image_Textual": 0, "Pure_Text": 0}
+    correct = {"Image_Textual": 0, "Pure_Text": 0}
+    details = {"QA_Questions": []}
+    for job, answer in zip(jobs, answers):
+        kind = job.metadata["type"]
+        totals[kind] += 1
+        ok = _judge_answer(answer, job.metadata["ground_truth"])
+        correct[kind] += int(ok)
+        details["QA_Questions"].append({
+            "image_id": job.metadata["image_id"],
+            "question type": kind,
+            "qid": job.metadata["qid"],
+            "correct": bool(ok),
+            "generated_answer": answer,
+            "ground_truth": job.metadata["ground_truth"],
+        })
+    if args.dump_details:
+        output_dir = Path(args.output_folder)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{mode}_qa_details.json").write_text(
+            json.dumps(details, ensure_ascii=False, indent=4), encoding="utf-8")
+    result = {
+        "Image-Textual Question Accuracy": 100 * correct["Image_Textual"] / totals["Image_Textual"] if totals["Image_Textual"] else 0,
+        "Pure Text Question Accuracy": 100 * correct["Pure_Text"] / totals["Pure_Text"] if totals["Pure_Text"] else 0,
+    }
+    pairs = _paired_correct(
+        jobs, answers,
+        lambda job, ans: _judge_answer(ans, job.metadata["ground_truth"]))
+    all_acc, all_err = _all_acc_err(pairs)
+    if all_acc is not None:
+        result["All Modal Question Accuracy"] = all_acc
+        result["All Modal Question Error"] = all_err
+    return result
+
+
 def generation_jobs(path, mode, forget_file, args):
     jobs = []
     for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
@@ -610,6 +698,9 @@ def main():
         results = {}
         if "forget" in scopes:
             results["Forget Set Results"] = evaluate_scope(backend, forget_file, "forget", forget_file, args)
+        if "qa" in scopes:
+            results["QA (MM_QA/UM_QA) Results"] = evaluate_qa(
+                backend, forget_file, "forget", forget_file, args)
         if "retain_shared" in scopes:
             results["Retain Set (shared dataset) Results"] = evaluate_scope(backend, retain_file, "retain_shared", forget_file, args)
         if "retain_celebrity" in scopes:

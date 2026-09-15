@@ -16,8 +16,9 @@ from pathlib import Path
 
 import numpy as np
 
-TASKS = ("fill", "classification", "generation")
+TASKS = ("qa", "fill", "classification", "generation")
 DETAIL_FILES = {
+    "qa": ("qa_details.json", "QA_Questions"),
     "fill": ("fill_details.json", "Fill_Questions"),
     "classification": ("classification_details.json", "Classification_Questions"),
     "generation": ("generation_results.json", "Generation_Questions"),
@@ -186,7 +187,7 @@ def main():
     parser.add_argument("--oracle_dir", required=True)
     parser.add_argument("--unlearned_dir", required=True)
     parser.add_argument("--label", default="unlearned")
-    parser.add_argument("--tasks", default="fill,classification")
+    parser.add_argument("--tasks", default="qa,fill,classification")
     parser.add_argument("--delta", type=float, default=0.10)
     parser.add_argument("--bootstrap", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=42)
