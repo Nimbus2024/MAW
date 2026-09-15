@@ -57,6 +57,7 @@ def main():
     for run in runs:
         run_dir = Path(run["run_dir"])
         entry = {"run_dir": str(run_dir), "alpha": float(run["alpha"]),
+                 "modality": run.get("modality", "both"),
                  "oracle_dir": run["oracle_dir"], "epochs": []}
         for epoch_dir in sorted(run_dir.glob("runs/epoch-*")):
             if not (epoch_dir / "model").is_dir():
@@ -84,17 +85,17 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"{'alpha':>8} {'epoch':>8} {'IT_fill':>8} {'PT_fill':>8} {'acc_gap':>8} "
-          f"{'meanD':>8} {'perm_p':>7} {'gap_um-mm':>10}")
+    print(f"{'modality':>8} {'alpha':>8} {'epoch':>8} {'IT_fill':>8} {'PT_fill':>8} "
+          f"{'acc_gap':>8} {'meanD':>8} {'perm_p':>7} {'gap_um-mm':>10}")
     for run in out["runs"]:
         gm = run.get("final_margins") or {}
         for ep in run["epochs"]:
             def fmt(v, nd=3):
                 return "NA" if v is None else f"{v:.{nd}f}"
-            print(f"{run['alpha']:>8.4f} {ep['epoch']:>8} {fmt(ep['it_fill_acc'],2):>8} "
-                  f"{fmt(ep['pt_fill_acc'],2):>8} {fmt(ep['acc_gap_it_minus_pt'],2):>8} "
-                  f"{fmt(ep['mean_delta'],4):>8} {fmt(ep['perm_p'],4):>7} "
-                  f"{fmt(gm.get('gap_um_minus_mm'),4):>10}")
+            print(f"{run['modality']:>8} {run['alpha']:>8.4f} {ep['epoch']:>8} "
+                  f"{fmt(ep['it_fill_acc'],2):>8} {fmt(ep['pt_fill_acc'],2):>8} "
+                  f"{fmt(ep['acc_gap_it_minus_pt'],2):>8} {fmt(ep['mean_delta'],4):>8} "
+                  f"{fmt(ep['perm_p'],4):>7} {fmt(gm.get('gap_um_minus_mm'),4):>10}")
     print(f"saved: {out_path}")
 
 
