@@ -200,8 +200,11 @@ def main():
         task = task.strip()
         if task not in TASKS:
             raise ValueError(f"unknown task: {task}")
-        res = analyze_task(args.oracle_dir, args.unlearned_dir, task,
-                           args.delta, args.bootstrap, args.seed)
+        try:
+            res = analyze_task(args.oracle_dir, args.unlearned_dir, task,
+                               args.delta, args.bootstrap, args.seed)
+        except FileNotFoundError as exc:
+            res = {"error": f"missing details file: {exc}"}
         results["tasks"][task] = res
         if res.get("permutation", {}).get("p") is not None:
             perm_tasks.append(task)
