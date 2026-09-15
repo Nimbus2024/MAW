@@ -45,9 +45,13 @@ def layer_of(module: str):
     return "other"
 
 
+def _norm(a: torch.Tensor) -> float:
+    return float(a.flatten().double().norm())
+
+
 def cosine(a: torch.Tensor, b: torch.Tensor):
-    a = a.flatten()
-    b = b.flatten()
+    a = a.flatten().double()
+    b = b.flatten().double()
     na, nb = a.norm(), b.norm()
     if na == 0 or nb == 0:
         return None
@@ -61,8 +65,8 @@ def compare(deltas_a, deltas_b):
         da, db = deltas_a[module], deltas_b[module]
         per_module[module] = {
             "cos": cosine(da, db),
-            "norm_a": float(da.norm()),
-            "norm_b": float(db.norm()),
+            "norm_a": _norm(da),
+            "norm_b": _norm(db),
             "shape": list(da.shape),
         }
     by_layer = {}
@@ -75,8 +79,8 @@ def compare(deltas_a, deltas_b):
         cb = torch.cat([deltas_b[m].flatten() for m in modules])
         per_layer[str(layer)] = {
             "cos": cosine(ca, cb),
-            "norm_a": float(ca.norm()),
-            "norm_b": float(cb.norm()),
+            "norm_a": _norm(ca),
+            "norm_b": _norm(cb),
             "n_modules": len(modules),
         }
     ga = torch.cat([deltas_a[m].flatten() for m in shared])
@@ -86,7 +90,7 @@ def compare(deltas_a, deltas_b):
         "n_modules": len(shared),
         "missing_in_b": sorted(set(deltas_a) - set(deltas_b)),
         "missing_in_a": sorted(set(deltas_b) - set(deltas_a)),
-        "global": {"cos": global_cos, "norm_a": float(ga.norm()), "norm_b": float(gb.norm())},
+        "global": {"cos": global_cos, "norm_a": _norm(ga), "norm_b": _norm(gb)},
         "per_layer": per_layer,
         "per_module": per_module,
     }
