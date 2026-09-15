@@ -130,8 +130,12 @@ class GradAccountant:
             if p.grad is None:
                 continue
             grp, _ = _param_group(n)
-            entry = stats.setdefault(grp, {"sq1": 0.0, "sq2": 0.0, "dot": 0.0})
+            entry = stats.setdefault(grp, {"sq1": 0.0, "sq2": 0.0, "dot": 0.0,
+                                           "nan": 0, "inf": 0, "max_abs": 0.0})
             g = p.grad.detach().float()
+            entry["nan"] += int(torch.isnan(g).sum().item())
+            entry["inf"] += int(torch.isinf(g).sum().item())
+            entry["max_abs"] = max(entry["max_abs"], float(g.abs().max().item()))
             if single == "mm":
                 entry["sq1"] += float(g.pow(2).sum().item())
             elif single == "um":
@@ -169,6 +173,9 @@ class GradAccountant:
                 "norm_mm": n1,
                 "norm_um": n2,
                 "cos": (dot / (n1 * n2)) if n1 > 0 and n2 > 0 else None,
+                "nan": stats[k]["nan"],
+                "inf": stats[k]["inf"],
+                "max_abs": stats[k]["max_abs"],
             }
         n1, n2 = gsq1 ** 0.5, gsq2 ** 0.5
         out["_global"] = {
