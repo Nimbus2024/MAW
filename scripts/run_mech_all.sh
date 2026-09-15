@@ -8,6 +8,10 @@ set -euo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESULTS_ROOT="${RESULTS_ROOT:-${CODE_ROOT}/../results}"
+WORK_ROOT="${WORK_ROOT:-$(dirname "${RESULTS_ROOT}")}"
+export TMPDIR="${TMPDIR:-${WORK_ROOT}/tmp}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${WORK_ROOT}/.cache}"
+mkdir -p "${TMPDIR}" "${XDG_CACHE_HOME}"
 ENV_NAME="${ENV_NAME:-maw}"
 LOG_DIR="${RESULTS_ROOT}/_analysis"
 LOG="${LOG_DIR}/mech_orchestrator.log"
