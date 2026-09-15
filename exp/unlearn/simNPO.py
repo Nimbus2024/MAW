@@ -81,6 +81,104 @@ def compute_simnpo_loss(model, ref_model, input_ids, attention_mask, pixel_value
     return -(2.0 / beta) * F.logsigmoid(-beta * ratio - gamma), ratio.detach().mean()
 
 
+def _param_group(name):
+    """把 LoRA 参数名归组: layer_{N}_{attn|mlp} / projector / vision / other。"""
+    if "language_model.layers." in name:
+        rest = name.split("language_model.layers.", 1)[1]
+        layer = rest.split(".", 1)[0]
+        if any(k in name for k in ("q_proj", "k_proj", "v_proj", "o_proj")):
+            kind = "attn"
+        elif any(k in name for k in ("gate_proj", "up_proj", "down_proj")):
+            kind = "mlp"
+        else:
+            kind = "other"
+        return f"layer_{layer}_{kind}", kind
+    if "multi_modal_projector" in name:
+        return "projector", "projector"
+    if "vision" in name:
+        return "vision", "vision"
+    return "other", "other"
+
+
+def _trainable_named_params(model):
+    return [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+
+
+def _snapshot_grads(named_params):
+    return {n: p.grad.detach().clone() for n, p in named_params if p.grad is not None}
+
+
+class GradAccountant:
+    """逐模态梯度范数 / 余弦记账（按参数组聚合，跨 rank 求和）。"""
+
+    def __init__(self, accelerator, named_params):
+        self.accelerator = accelerator
+        self.named_params = named_params
+        self.groups = {}
+        self.snap = None
+
+    def after_first_backward(self):
+        self.snap = _snapshot_grads(self.named_params)
+
+    def _empty(self):
+        return {}
+
+    def collect(self, alpha_um, single):
+        """single: None(both) / 'mm' / 'um'。返回 {group: {...}} 与 global 统计。"""
+        stats = {}
+        for n, p in self.named_params:
+            if p.grad is None:
+                continue
+            grp, _ = _param_group(n)
+            entry = stats.setdefault(grp, {"sq1": 0.0, "sq2": 0.0, "dot": 0.0})
+            g = p.grad.detach().float()
+            if single == "mm":
+                entry["sq1"] += float(g.pow(2).sum().item())
+            elif single == "um":
+                g2 = g / max(alpha_um, 1e-12)
+                entry["sq2"] += float(g2.pow(2).sum().item())
+            else:
+                g1 = self.snap[n].float()
+                g2 = (g - self.snap[n].float()) / max(alpha_um, 1e-12)
+                entry["sq1"] += float(g1.pow(2).sum().item())
+                entry["sq2"] += float(g2.pow(2).sum().item())
+                entry["dot"] += float((g1 * g2).sum().item())
+        return stats
+
+    def finalize(self, stats):
+        """跨 rank 求和, 返回可 JSON 化的 {group: {norm_mm, norm_um, cos}} + global。"""
+        keys = sorted(stats.keys())
+        flat = []
+        for k in keys:
+            e = stats[k]
+            flat.extend([e["sq1"], e["sq2"], e["dot"]])
+        t = torch.tensor(flat, dtype=torch.float64,
+                         device=self.accelerator.device)
+        t = self.accelerator.reduce(t, reduction="sum")
+        vals = t.tolist()
+        out = {}
+        gsq1 = gsq2 = gdot = 0.0
+        for i, k in enumerate(keys):
+            sq1, sq2, dot = vals[3 * i:3 * i + 3]
+            gsq1 += sq1
+            gsq2 += sq2
+            gdot += dot
+            n1 = sq1 ** 0.5
+            n2 = sq2 ** 0.5
+            out[k] = {
+                "norm_mm": n1,
+                "norm_um": n2,
+                "cos": (dot / (n1 * n2)) if n1 > 0 and n2 > 0 else None,
+            }
+        n1, n2 = gsq1 ** 0.5, gsq2 ** 0.5
+        out["_global"] = {
+            "norm_mm": n1,
+            "norm_um": n2,
+            "cos": (gdot / (n1 * n2)) if n1 > 0 and n2 > 0 else None,
+        }
+        return out
+
+
 def main(args):
     set_global_seed(42)
     model, processor = load_model_and_processor(args)
@@ -119,6 +217,17 @@ def main(args):
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler)
 
+    do_mm = args.modality in ("both", "mm")
+    do_um = args.modality in ("both", "um")
+    accountant = None
+    grad_log_f = None
+    if args.grad_log:
+        accountant = GradAccountant(
+            accelerator, _trainable_named_params(accelerator.unwrap_model(model)))
+        if accelerator.is_main_process:
+            grad_log_f = open(
+                os.path.join(args.run_dir, "logs", "grad_norms.jsonl"), "w")
+
     global_step = 0
     for epoch in range(args.num_epochs):
         model.train()
@@ -126,32 +235,65 @@ def main(args):
         bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", total=len(train_dataloader))
         for pair in bar:
             mm, um = pair["mm"], pair["um"]
-            input_ids, attn, pixel, labels = mm
-            loss_mm, ratio_mm = compute_simnpo_loss(
-                model, ref_model, input_ids, attn, pixel, labels,
-                args.beta, args.gamma)
-            loss_mm = loss_mm.mean()
-            accelerator.backward(loss_mm)
-            input_ids_u, attn_u, _, labels_u = um
-            loss_um, ratio_um = compute_simnpo_loss(
-                model, ref_model, input_ids_u, attn_u, None, labels_u,
-                args.beta, args.gamma)
-            loss_um = loss_um.mean()
-            accelerator.backward(args.alpha * loss_um)
+            loss_mm = loss_um = None
+            ratio_mm = ratio_um = None
+            if do_mm:
+                input_ids, attn, pixel, labels = mm
+                loss_mm, ratio_mm = compute_simnpo_loss(
+                    model, ref_model, input_ids, attn, pixel, labels,
+                    args.beta, args.gamma)
+                loss_mm = loss_mm.mean()
+                accelerator.backward(loss_mm)
+                if accountant is not None:
+                    accountant.after_first_backward()
+            if do_um:
+                input_ids_u, attn_u, _, labels_u = um
+                loss_um, ratio_um = compute_simnpo_loss(
+                    model, ref_model, input_ids_u, attn_u, None, labels_u,
+                    args.beta, args.gamma)
+                loss_um = loss_um.mean()
+                accelerator.backward(args.alpha * loss_um)
+            grad_stats = None
+            if accountant is not None:
+                single = None if (do_mm and do_um) else ("mm" if do_mm else "um")
+                grad_stats = accountant.finalize(
+                    accountant.collect(args.alpha, single))
             accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
             lr_scheduler.step()
-            loss = loss_mm + args.alpha * loss_um
-            total_loss += loss.item()
+            loss_val = (loss_mm.item() if loss_mm is not None else 0.0) + \
+                (args.alpha * loss_um.item() if loss_um is not None else 0.0)
+            total_loss += loss_val
+            ratios = {}
+            if do_mm and do_um:
+                rt = torch.tensor(
+                    [ratio_mm.item(), ratio_um.item()],
+                    dtype=torch.float64, device=accelerator.device)
+                rt = accelerator.reduce(rt, reduction="mean")
+                ratios = {"ratio_mm": float(rt[0]), "ratio_um": float(rt[1]),
+                          "gap": float(rt[1] - rt[0])}
+            elif do_mm:
+                ratios = {"ratio_mm": float(ratio_mm.item())}
+            elif do_um:
+                ratios = {"ratio_um": float(ratio_um.item())}
             if writer is not None:
-                writer.add_scalar("Loss/train", loss.item(), global_step)
-                writer.add_scalar("Loss/mm", loss_mm.item(), global_step)
-                writer.add_scalar("Loss/um", loss_um.item(), global_step)
-                writer.add_scalar("ratio/mm", ratio_mm.item(), global_step)
-                writer.add_scalar("ratio/um", ratio_um.item(), global_step)
+                writer.add_scalar("Loss/train", loss_val, global_step)
+                if loss_mm is not None:
+                    writer.add_scalar("Loss/mm", loss_mm.item(), global_step)
+                if loss_um is not None:
+                    writer.add_scalar("Loss/um", loss_um.item(), global_step)
+                for k, v in ratios.items():
+                    writer.add_scalar(f"ratio/{k}", v, global_step)
+            if grad_log_f is not None:
+                rec = {"step": global_step, "epoch": epoch + 1,
+                       "loss_mm": loss_mm.item() if loss_mm is not None else None,
+                       "loss_um": loss_um.item() if loss_um is not None else None,
+                       **ratios, "grad": grad_stats}
+                grad_log_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                grad_log_f.flush()
             global_step += 1
-            bar.set_postfix(loss=loss.item())
+            bar.set_postfix(loss=loss_val)
             if args.max_steps is not None and global_step >= args.max_steps:
                 break
 
@@ -169,6 +311,8 @@ def main(args):
         if args.max_steps is not None and global_step >= args.max_steps:
             break
 
+    if grad_log_f is not None:
+        grad_log_f.close()
     if writer is not None:
         writer.close()
 
@@ -209,6 +353,10 @@ if __name__ == "__main__":
                         help="单模态 forget 项权重")
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--modality", choices=("both", "mm", "um"), default="both",
+                        help="E1 模态隔离: both=联合; mm=仅视觉(IT) forget; um=仅文本(PT) forget")
+    parser.add_argument("--grad_log", action="store_true",
+                        help="E5 记账: 写 logs/grad_norms.jsonl (逐模态梯度范数/余弦/margin)")
     args = parser.parse_args()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")

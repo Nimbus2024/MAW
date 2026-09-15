@@ -68,6 +68,14 @@ def parse_args():
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.90)
     parser.add_argument("--dtype", choices=("auto", "float16", "bfloat16"), default="auto")
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--scopes", default="forget,retain_shared,retain_celebrity",
+                        help="要评估的 scope 子集 (逗号分隔)")
+    parser.add_argument("--dump_details", action="store_true",
+                        help="E8: 写逐题明细 JSON (fill/classification/generation)")
+    parser.add_argument("--image_noise_sigma", type=float, default=0.0,
+                        help="E8 轴B: 图像高斯噪声 sigma (0-255 像素尺度)")
+    parser.add_argument("--prompt_suffix", type=str, default="",
+                        help="E8 轴B: 追加到每个问题的后缀 (DUA 式对抗后缀)")
     return parser.parse_args()
 
 
@@ -322,16 +330,25 @@ def questions(items, args):
     return values
 
 
-def row_image(row, mode):
+def row_image(row, mode, noise_sigma=0.0):
     data = row["image"].get("bytes")
-    return Image.open(BytesIO(data)).convert("RGB")
+    image = Image.open(BytesIO(data)).convert("RGB")
+    if noise_sigma and noise_sigma > 0:
+        import zlib
+        import numpy as np
+
+        rng = np.random.default_rng(zlib.crc32(str(row["ID"]).encode()) & 0xFFFFFFFF)
+        arr = np.asarray(image, dtype=np.float32)
+        arr = np.clip(arr + rng.normal(0.0, noise_sigma, size=arr.shape), 0, 255)
+        image = Image.fromarray(arr.astype("uint8"))
+    return image
 
 
 def classification_jobs(path, mode, forget_file, args):
     jobs = []
     skipped = {"Image_Textual": 0, "Pure_Text": 0}
     for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
-        image = row_image(row, mode)
+        image = row_image(row, mode, args.image_noise_sigma)
         groups = row["Classification_Task"]
         for group_name in ("Image_Textual_Questions", "Pure_Text_Questions"):
             question_type = "Image_Textual" if group_name.startswith("Image") else "Pure_Text"
@@ -346,10 +363,10 @@ def classification_jobs(path, mode, forget_file, args):
                     print(f"Skipping invalid classification question for ID {row['ID']}: {exc}")
                     continue
                 jobs.append(Job(
-                    question=f"{item['Question']}\nSelect answer in {options}",
+                    question=f"{item['Question']}\nSelect answer in {options}{args.prompt_suffix}",
                     image=image if question_type == "Image_Textual" else None,
                     metadata={"type": question_type, "correct": correct, "options": options,
-                              "row": row_idx, "qid": qid},
+                              "row": row_idx, "qid": qid, "image_id": row["ID"]},
                 ))
                 qid += 1
     return jobs, skipped
@@ -385,11 +402,26 @@ def evaluate_classification(backend, path, mode, forget_file, args):
     answers = backend.generate(jobs, args.max_new_tokens)
     totals = {"Image_Textual": 0, "Pure_Text": 0}
     correct = {"Image_Textual": 0, "Pure_Text": 0}
+    details = {"Classification_Questions": []}
     for job, answer in zip(jobs, answers):
         kind = job.metadata["type"]
         totals[kind] += 1
-        correct[kind] += int(benchmark.is_correct_fuzzy(
-            answer, job.metadata["options"], job.metadata["correct"]))
+        ok = benchmark.is_correct_fuzzy(
+            answer, job.metadata["options"], job.metadata["correct"])
+        correct[kind] += int(ok)
+        details["Classification_Questions"].append({
+            "image_id": job.metadata["image_id"],
+            "question type": kind,
+            "qid": job.metadata["qid"],
+            "correct": bool(ok),
+            "generated_answer": answer,
+            "correct_answer": str(job.metadata["correct"]),
+        })
+    if args.dump_details:
+        output_dir = Path(args.output_folder)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{mode}_classification_details.json").write_text(
+            json.dumps(details, ensure_ascii=False, indent=4), encoding="utf-8")
     result = {
         "Image-Textual Question Accuracy": 100 * correct["Image_Textual"] / totals["Image_Textual"] if totals["Image_Textual"] else 0,
         "Pure Text Question Accuracy": 100 * correct["Pure_Text"] / totals["Pure_Text"] if totals["Pure_Text"] else 0,
@@ -410,17 +442,18 @@ def evaluate_classification(backend, path, mode, forget_file, args):
 def fill_jobs(path, mode, forget_file, args):
     jobs = []
     for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
-        image = row_image(row, mode)
+        image = row_image(row, mode, args.image_noise_sigma)
         per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Mask_Task"], args):
             kind = item["Type"]
             prompt = item["Question"].replace("__", "[Blank]")
             prompt += "\nPlease **ONLY** provide the correct answer that should replace the [Blank]."
+            prompt += args.prompt_suffix
             jobs.append(Job(
                 question=prompt,
                 image=image if kind == "Image_Textual" else None,
                 metadata={"type": kind, "ground_truth": item["Ground_Truth"],
-                          "row": row_idx, "qid": per_kind[kind]},
+                          "row": row_idx, "qid": per_kind[kind], "image_id": row["ID"]},
             ))
             per_kind[kind] += 1
     return jobs
@@ -431,10 +464,25 @@ def evaluate_fill(backend, path, mode, forget_file, args):
     answers = backend.generate(jobs, args.max_new_tokens)
     totals = {"Image_Textual": 0, "Pure_Text": 0}
     correct = {"Image_Textual": 0, "Pure_Text": 0}
+    details = {"Fill_Questions": []}
     for job, answer in zip(jobs, answers):
         kind = job.metadata["type"]
         totals[kind] += 1
-        correct[kind] += int(str(job.metadata["ground_truth"]).casefold() in answer.casefold())
+        ok = str(job.metadata["ground_truth"]).casefold() in answer.casefold()
+        correct[kind] += int(ok)
+        details["Fill_Questions"].append({
+            "image_id": job.metadata["image_id"],
+            "question type": kind,
+            "qid": job.metadata["qid"],
+            "correct": bool(ok),
+            "generated_answer": answer,
+            "ground_truth": job.metadata["ground_truth"],
+        })
+    if args.dump_details:
+        output_dir = Path(args.output_folder)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{mode}_fill_details.json").write_text(
+            json.dumps(details, ensure_ascii=False, indent=4), encoding="utf-8")
     result = {
         "image_textual_accuracy": 100 * correct["Image_Textual"] / totals["Image_Textual"] if totals["Image_Textual"] else 0,
         "pure_text_accuracy": 100 * correct["Pure_Text"] / totals["Pure_Text"] if totals["Pure_Text"] else 0,
@@ -452,12 +500,13 @@ def evaluate_fill(backend, path, mode, forget_file, args):
 def generation_jobs(path, mode, forget_file, args):
     jobs = []
     for row_idx, (_, row) in enumerate(evaluation_rows(path, mode, forget_file, args).iterrows()):
-        image = row_image(row, mode)
+        image = row_image(row, mode, args.image_noise_sigma)
         per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Generation_Task"], args):
             kind = item["Type"]
             prompt = item["Question"]
             prompt += "\nAnswer the question based on your trained knowledge in one sentence accurately in ENGLISH."
+            prompt += args.prompt_suffix
             jobs.append(Job(
                 question=prompt,
                 image=image if kind == "Image_Textual" else None,
@@ -497,9 +546,11 @@ def evaluate_generation(backend, path, mode, forget_file, args):
         details["Generation_Questions"].append({
             "image_id": job.metadata["image_id"],
             "question type": kind,
+            "qid": job.metadata["qid"],
             "question": job.metadata["question"],
             "generated_answer": answer,
             "ground_truth": truth,
+            "rougeL": scores["rougeL"].fmeasure,
         })
 
     output_dir = Path(args.output_folder)
@@ -553,13 +604,16 @@ def main():
         if not Path(path).exists():
             raise FileNotFoundError(path)
 
+    scopes = {s.strip() for s in args.scopes.split(",") if s.strip()}
     backend = VLLMBackend(args)
     try:
-        results = {
-            "Forget Set Results": evaluate_scope(backend, forget_file, "forget", forget_file, args),
-            "Retain Set (shared dataset) Results": evaluate_scope(backend, retain_file, "retain_shared", forget_file, args),
-            "Retain Set (real person) Results": evaluate_scope(backend, args.celebrity_data, "retain_celebrity", forget_file, args),
-        }
+        results = {}
+        if "forget" in scopes:
+            results["Forget Set Results"] = evaluate_scope(backend, forget_file, "forget", forget_file, args)
+        if "retain_shared" in scopes:
+            results["Retain Set (shared dataset) Results"] = evaluate_scope(backend, retain_file, "retain_shared", forget_file, args)
+        if "retain_celebrity" in scopes:
+            results["Retain Set (real person) Results"] = evaluate_scope(backend, args.celebrity_data, "retain_celebrity", forget_file, args)
         output = Path(args.output_folder) / f"{args.output_file}_final_evaluation_results.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(results, ensure_ascii=False, indent=4), encoding="utf-8")

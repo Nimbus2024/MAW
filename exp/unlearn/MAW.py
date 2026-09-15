@@ -469,7 +469,12 @@ def main(args):
                 M_mul = accelerator.reduce(M_mul, reduction="mean")
                 M_uni = accelerator.reduce(M_uni, reduction="mean")
                 gap = float(M_mul - M_uni)
-                gamma = 1.0 / (1.0 + math.exp(-(args.alpha * (gap - gap_ema))))
+                if args.gamma_mode == "sigmoid_ema":
+                    gamma = 1.0 / (1.0 + math.exp(-(args.alpha * (gap - gap_ema))))
+                elif args.gamma_mode == "sigmoid_gap":
+                    gamma = 1.0 / (1.0 + math.exp(-(args.alpha * gap)))
+                else:
+                    gamma = float(args.gamma_fixed)
                 gap_ema = args.rho * gap_ema + (1.0 - args.rho) * gap
             m_mul = float(M_mul)
             m_uni = float(M_uni)
@@ -606,6 +611,11 @@ if __name__ == "__main__":
     # Dynamic gamma: γ = σ(α·(gap − gap_ema)), gap_ema 用 --rho 平滑(M0)
     parser.add_argument("--rho", type=float, default=0.8,
                         help="EMA smoothing coefficient for the margin gap (M0)")
+    parser.add_argument("--gamma_mode", choices=("sigmoid_ema", "sigmoid_gap", "fixed"),
+                        default="sigmoid_ema",
+                        help="E7 控制器: sigmoid_ema=σ(α(gap−EMA)); sigmoid_gap=σ(α·gap); fixed=常数")
+    parser.add_argument("--gamma_fixed", type=float, default=0.5,
+                        help="gamma_mode=fixed 时的常数 γ")
     parser.add_argument("--alpha", type=float, default=1.0,
                         help="scale coefficient for (M-M0) inside sigmoid")
     # Retain
