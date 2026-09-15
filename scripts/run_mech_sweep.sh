@@ -20,6 +20,10 @@ VANILLA_DIR="${VANILLA_DIR:-${MODEL_DIR}/llava-1.5-7b-hf}"
 TASK_DATA="${DATA_SPLIT_DIR}/full_data/train-00000-of-00001.parquet"
 CELEB_DATA="${DATA_SPLIT_DIR}/real_person/train-00000-of-00001.parquet"
 
+METHOD="${METHOD:-simNPO}"
+LABEL="${LABEL:-${METHOD}}"
+NPROC="${NPROC:-2}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 ALPHAS="${ALPHAS:-0.0667 0.2 0.3333 1 3 5 15}"
 MODALITY="${MODALITY:-both}"
 EPOCHS="${EPOCHS:-5}"
@@ -84,19 +88,32 @@ echo "== oracle: ${ORACLE_DIR}"
 
 for alpha in ${ALPHAS}; do
   TS="$(date +%Y%m%d_%H%M%S)"
-  RUN_DIR="${RESULTS_ROOT}/simNPO/${TS}${TAG:+-${TAG}}"
+  RUN_DIR="${RESULTS_ROOT}/${LABEL}/${TS}${TAG:+-${TAG}}"
   mkdir -p "${RUN_DIR}/logs/tensorboard" "${RUN_DIR}/config" "${RUN_DIR}/diagnosis"
-  echo "== [$(date +%H:%M:%S)] train modality=${MODALITY} alpha=${alpha} -> ${RUN_DIR}"
-  (
-    cd "${CODE_ROOT}"
-    "${PYTHON}" -m exp.unlearn.simNPO \
-      --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
-      --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
-      --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
-      --num_epochs "${EPOCHS}" --beta "${BETA}" --gamma 0.0 --alpha "${alpha}" \
-      --lora_r "${LORA_R}" --lora_alpha "${LORA_A}" \
-      --modality "${MODALITY}" --grad_log
-  ) > "${RUN_DIR}/logs/stdout.log" 2>&1
+  echo "== [$(date +%H:%M:%S)] train method=${METHOD} modality=${MODALITY} alpha=${alpha} -> ${RUN_DIR}"
+  if [ "${METHOD}" = "MAW" ]; then
+    (
+      cd "${CODE_ROOT}"
+      "${PYTHON}" -m accelerate.commands.launch --num_processes "${NPROC}" \
+        -m exp.unlearn.MAW \
+        --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
+        --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
+        --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
+        --num_epochs "${EPOCHS}" --beta "${BETA}" \
+        --lora_r "${LORA_R}" --lora_alpha "${LORA_A}" ${EXTRA_ARGS}
+    ) > "${RUN_DIR}/logs/stdout.log" 2>&1
+  else
+    (
+      cd "${CODE_ROOT}"
+      "${PYTHON}" -m exp.unlearn.simNPO \
+        --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
+        --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
+        --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
+        --num_epochs "${EPOCHS}" --beta "${BETA}" --gamma 0.0 --alpha "${alpha}" \
+        --lora_r "${LORA_R}" --lora_alpha "${LORA_A}" \
+        --modality "${MODALITY}" --grad_log ${EXTRA_ARGS}
+    ) > "${RUN_DIR}/logs/stdout.log" 2>&1
+  fi
 
   mapfile -t EPOCH_MODELS < <(ls -d "${RUN_DIR}"/runs/epoch-*/model 2>/dev/null | sort -V | tail -n "${EVAL_LAST_N}")
   for epoch_model in "${EPOCH_MODELS[@]}"; do
