@@ -25,7 +25,7 @@ fi
 echo "== orchestrator start $(date) =="
 echo "== python: $(command -v python) =="
 
-EPOCHS="${EPOCHS:-5}"
+EPOCHS="${EPOCHS:-3}"
 export EPOCHS
 
 if [ "${SKIP_E6:-0}" != "1" ]; then
