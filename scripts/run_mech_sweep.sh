@@ -31,6 +31,7 @@ LORA_A="${LORA_A:-16}"
 TP_SIZE="${TP_SIZE:-2}"
 FORGET_RATIO="${FORGET_RATIO:-5}"
 EVAL_BATCH="${EVAL_BATCH:-32}"
+EVAL_LAST_N="${EVAL_LAST_N:-1}"
 TAG="${TAG:-}"
 
 ANALYSIS_DIR="${RESULTS_ROOT}/_analysis"
@@ -97,7 +98,8 @@ for alpha in ${ALPHAS}; do
       --modality "${MODALITY}" --grad_log
   ) > "${RUN_DIR}/logs/stdout.log" 2>&1
 
-  for epoch_model in "${RUN_DIR}"/runs/epoch-*/model; do
+  mapfile -t EPOCH_MODELS < <(ls -d "${RUN_DIR}"/runs/epoch-*/model 2>/dev/null | sort -V | tail -n "${EVAL_LAST_N}")
+  for epoch_model in "${EPOCH_MODELS[@]}"; do
     [ -d "${epoch_model}" ] || continue
     epoch_name="$(basename "$(dirname "${epoch_model}")")"
     METRICS_DIR="${RUN_DIR}/runs/${epoch_name}/metrics"
