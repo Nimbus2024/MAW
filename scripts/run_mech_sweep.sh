@@ -32,13 +32,15 @@ ALPHAS="${ALPHAS:-0.0667 0.2 0.3333 1 3 5 15}"
 MODALITY="${MODALITY:-both}"
 EPOCHS="${EPOCHS:-3}"
 LR="${LR:-6.2e-6}"
-BS="${BS:-16}"
+BS="${BS:-8}"
 BETA="${BETA:-0.4}"
 LORA_R="${LORA_R:-8}"
 LORA_A="${LORA_A:-16}"
 TP_SIZE="${TP_SIZE:-1}"
 TRAIN_GPU="${TRAIN_GPU:-0}"
-export CUDA_VISIBLE_DEVICES="${TRAIN_GPU}"
+if [ "${TRAIN_GPU}" != "auto" ]; then
+  export CUDA_VISIBLE_DEVICES="${TRAIN_GPU}"
+fi
 FORGET_RATIO="${FORGET_RATIO:-5}"
 EVAL_BATCH="${EVAL_BATCH:-32}"
 EVAL_LAST_N="${EVAL_LAST_N:-2}"
@@ -100,7 +102,7 @@ for alpha in ${ALPHAS}; do
   if [ "${METHOD}" = "MAW" ]; then
     (
       cd "${CODE_ROOT}"
-      CUDA_VISIBLE_DEVICES="${TRAIN_GPU}" "${PYTHON}" -m exp.unlearn.MAW \
+      "${PYTHON}" -m exp.unlearn.MAW \
         --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
         --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
         --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
@@ -110,7 +112,7 @@ for alpha in ${ALPHAS}; do
   else
     (
       cd "${CODE_ROOT}"
-      CUDA_VISIBLE_DEVICES="${TRAIN_GPU}" "${PYTHON}" -m exp.unlearn.simNPO \
+      "${PYTHON}" -m exp.unlearn.simNPO \
         --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
         --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
         --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \
