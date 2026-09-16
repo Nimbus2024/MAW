@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """EAP-lite: 层级 activation-difference 归因。
 
-对每个层 L, 用一阶近似把行为损失的变化归因到该层的激活差:
-  score_L = E[ < dL/dh_L (unlearned), h_L(unlearned) - h_L(base) > ]
-(即 EAP 的层粒度版本; score 越大表示该层的激活变化对行为损失上升贡献越大)
+score_L = E[ < dL/dh_L (unlearned), h_L(unlearned) - h_L(base) > ]
+逐 batch 计算后按样本数平均 (序列长度不同, 不拼接)。
 """
 from __future__ import annotations
 
@@ -28,12 +27,12 @@ def pairs_of(data_split_dir, split, n, seed=42):
 
 @torch.no_grad()
 def layer_inputs(model, items, modality, layers, device, processor, max_length):
-    caps = {}
+    caps = {L: [] for L in layers}
     handles = []
     for L in layers:
         def make(idx):
             def hook(module, args):
-                caps.setdefault(idx, []).append(args[0].detach().clone())
+                caps[idx].append(args[0].detach().clone())
             return hook
         handles.append(get_layers(model)[L].register_forward_pre_hook(make(L)))
     for b in range(0, len(items), 2):
@@ -45,8 +44,8 @@ def layer_inputs(model, items, modality, layers, device, processor, max_length):
     return caps
 
 
-def layer_grads(model, items, modality, layers, device, processor, max_length):
-    caps, grads = {}, {}
+def layer_scores(model, items, modality, layers, device, processor, max_length, base_caps):
+    caps = {}
     handles = []
     first = min(layers)
 
@@ -60,26 +59,34 @@ def layer_grads(model, items, modality, layers, device, processor, max_length):
 
     def make_keep(idx):
         def hook(module, args):
-            x = args[0]
-            x.retain_grad()
-            caps[idx] = x
+            args[0].retain_grad()
+            caps[idx] = args[0]
         return hook
 
     handles.append(get_layers(model)[first].register_forward_pre_hook(make_first(first)))
     for L in layers:
         if L != first:
             handles.append(get_layers(model)[L].register_forward_pre_hook(make_keep(L)))
-    for b in range(0, len(items), 2):
-        batch = build_batch(items[b:b + 2], modality, processor, max_length)
+
+    scores = {L: 0.0 for L in layers}
+    n = 0
+    for bi, b in enumerate(range(0, len(items), 2)):
+        chunk = items[b:b + 2]
+        batch = build_batch(chunk, modality, processor, max_length)
         ids, attn, pixel, labels = batch_to_device(batch, modality, device)
         loss = model(input_ids=ids, attention_mask=attn, pixel_values=pixel, labels=labels).loss
         loss.backward()
         for L in layers:
-            grads.setdefault(L, []).append(caps[L].grad.detach().float().cpu())
+            g = caps[L].grad
+            if g is None:
+                continue
+            diff = caps[L].detach().float() - base_caps[L][bi].float()
+            scores[L] += float((g.float() * diff).sum())
             caps[L].grad = None
+        n += len(chunk)
     for h in handles:
         h.remove()
-    return {L: torch.cat(v, 0) for L, v in grads.items()}
+    return {L: v / max(n, 1) for L, v in scores.items()}
 
 
 def main():
@@ -109,8 +116,8 @@ def main():
     pairs = pairs_of(args.data_split_dir, args.forget_split, args.n, args.seed)
     items = {"mm": [{"image": p["image"], "question": p["mm_q"], "answer": p["mm_a"]} for p in pairs],
              "um": [{"image": None, "question": p["um_q"], "answer": p["um_a"]} for p in pairs]}
-    base_h = {m: layer_inputs(model, items[m], m, layers, args.device, processor, args.max_length)
-              for m in ("mm", "um")}
+    base_caps = {m: layer_inputs(model, items[m], m, layers, args.device, processor, args.max_length)
+                 for m in ("mm", "um")}
 
     result = {"layers": layers, "adapters": {}}
     for item in args.adapters.split(","):
@@ -118,12 +125,10 @@ def main():
         ab, scaling = load_adapter_ab(Path(path))
         ab = {norm_name(k): v for k, v in ab.items()}
         apply_delta(modules, ab, scaling, +1.0)
-        per = {}
-        for m in ("mm", "um"):
-            g = layer_grads(model, items[m], m, layers, args.device, processor, args.max_length)
-            per[m] = {str(L): float((g[L] * (g[L] - base_h[m][L])).sum() / g[L].shape[0]) for L in layers}
+        per = {m: layer_scores(model, items[m], m, layers, args.device, processor, args.max_length, base_caps[m])
+               for m in ("mm", "um")}
         apply_delta(modules, ab, scaling, -1.0)
-        result["adapters"][name] = per
+        result["adapters"][name] = {m: {str(L): v for L, v in per[m].items()} for m in per}
         print(f"{name} done", flush=True)
 
     out = Path(args.output)
@@ -133,7 +138,7 @@ def main():
     for L in layers:
         it = [result["adapters"][a]["mm"][str(L)] for a in result["adapters"]]
         pt = [result["adapters"][a]["um"][str(L)] for a in result["adapters"]]
-        print(f"{L:>5} {sum(it)/len(it):>11.4f} {sum(pt)/len(pt):>10.4f}")
+        print(f"{L:>5} {sum(it)/len(it):>11.5f} {sum(pt)/len(pt):>10.5f}")
     print(f"saved: {out}")
 
 
