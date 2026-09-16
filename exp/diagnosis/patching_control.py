@@ -133,12 +133,12 @@ def main():
             X = torch.cat([h.reshape(-1, h.shape[-1]) for h in fit_base[L]], 0).float()
             Y = torch.cat([h.reshape(-1, h.shape[-1]) for h in fit_unl[L]], 0).float()
             W = procrustes(X, Y)
-            rand_ref = list(reversed(base_h[L]))
-            rand_unl = list(reversed(unl_h[L]))
+            zero_ref = [torch.zeros_like(h) for h in base_h[L]]
+            shuf_ref = [h[:, torch.randperm(h.shape[1]), :] for h in base_h[L]]
             apply_delta(modules, ab, scaling, +1.0)
             fwd = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, base_h[L])
-            rnd = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, rand_ref)
-            rnd_unl = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, rand_unl)
+            rnd = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, zero_ref)
+            rnd_unl = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, shuf_ref)
             aligned = [W @ h.reshape(-1, h.shape[-1]).float() for h in base_h[L]]
             aligned = [a.reshape(base_h[L][i].shape).to(base_h[L][i].dtype) for i, a in enumerate(aligned)]
             aln = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, aligned)
@@ -146,9 +146,9 @@ def main():
             apply_delta(modules, ab, scaling, -1.0)
             rev = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, unl_h[L])
             per[str(L)] = {"base_ce": base_ce, "unl_ce": unl_ce, "fwd_ce": fwd, "rev_ce": rev,
-                           "rand_ce": rnd, "rand_unl_ce": rnd_unl, "align_ce": aln, "self_ce": selfc}
+                           "zero_ce": rnd, "shuffle_ce": rnd_unl, "align_ce": aln, "self_ce": selfc}
             print(f"{m} L{L}: base={base_ce:.4f} unl={unl_ce:.4f} fwd={fwd:.4f} rev={rev:.4f} "
-                  f"rand={rnd:.4f} rand_unl={rnd_unl:.4f} align={aln:.4f} self={selfc:.4f}", flush=True)
+                  f"zero={rnd:.4f} shuffle={rnd_unl:.4f} align={aln:.4f} self={selfc:.4f}", flush=True)
         result["adapters"][m] = per
 
     out = Path(args.output)
