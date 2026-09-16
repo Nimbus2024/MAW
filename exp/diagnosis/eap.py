@@ -51,9 +51,9 @@ def layer_grads(model, items, modality, layers, device, processor, max_length):
     for L in layers:
         def make(idx):
             def hook(module, args):
-                x = args[0]
-                x.retain_grad()
-                caps.setdefault(idx, []).append(x)
+                x = args[0].detach().requires_grad_(True)
+                caps[idx] = x
+                return (x,)
             return hook
         handles.append(get_layers(model)[L].register_forward_pre_hook(make(L)))
     for b in range(0, len(items), 2):
@@ -62,10 +62,8 @@ def layer_grads(model, items, modality, layers, device, processor, max_length):
         loss = model(input_ids=ids, attention_mask=attn, pixel_values=pixel, labels=labels).loss
         loss.backward()
         for L in layers:
-            x = caps[L][-1]
-            grads.setdefault(L, []).append(x.grad.detach().float().cpu())
-            x.grad = None
-        model.zero_grad(set_to_none=True)
+            grads.setdefault(L, []).append(caps[L].grad.detach().float().cpu())
+            caps[L].grad = None
     for h in handles:
         h.remove()
     return {L: torch.cat(v, 0) for L, v in grads.items()}

@@ -45,7 +45,7 @@ def main():
     base = LlavaForConditionalGeneration.from_pretrained(
         args.base, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
         local_files_only=True).to(args.device)
-    model = PeftModel.from_pretrained(base, args.adapter).to(args.device)
+    model = PeftModel.from_pretrained(base, args.adapter, is_trainable=True).to(args.device)
     model.eval()
     model.config.use_cache = False
     lora_params = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
