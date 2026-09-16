@@ -139,7 +139,7 @@ def main():
             fwd = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, base_h[L])
             rnd = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, zero_ref)
             rnd_unl = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, shuf_ref)
-            aligned = [W @ h.reshape(-1, h.shape[-1]).float() for h in base_h[L]]
+            aligned = [h.reshape(-1, h.shape[-1]).float() @ W for h in base_h[L]]
             aligned = [a.reshape(base_h[L][i].shape).to(base_h[L][i].dtype) for i, a in enumerate(aligned)]
             aln = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, aligned)
             selfc = ce_with(model, probes[m], m, args.device, processor, args.max_length, L, unl_h[L])
