@@ -56,8 +56,8 @@ def hidden_means(model, items, modality: str, layer: int, device: str, batch_siz
         ids, attn = ids.to(device), attn.to(device)
         if pixel is not None:
             pixel = pixel.to(device)
-        out = model(input_ids=ids, attention_mask=attn, pixel_values=pixel,
-                    output_hidden_states=True, use_cache=False)
+        out = model.model(input_ids=ids, attention_mask=attn, pixel_values=pixel,
+                          output_hidden_states=True, use_cache=False)
         h = out.hidden_states[layer].float()
         mask = attn.unsqueeze(-1).float()
         reps.append(((h * mask).sum(1) / mask.sum(1).clamp_min(1)).cpu())
