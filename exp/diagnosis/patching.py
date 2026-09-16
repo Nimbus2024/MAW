@@ -18,6 +18,10 @@ from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from ..eval.eval_vllm import _judge_answer
 from ..unlearn._paired import build_pairs, collate_plain
+from ..unlearn.unlearn_dataset import (
+    train_collate_fn_llava_multimodal,
+    train_collate_fn_llava_unimodal,
+)
 from .adapter_geometry import load_adapter_ab
 
 TARGET_SUFFIXES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
@@ -79,6 +83,25 @@ def to_device(batch, modality, device):
     ids, attn, labels = ids.to(device), attn.to(device), labels.to(device)
     if pixel is not None:
         pixel = pixel.to(device)
+    return ids, attn, pixel, labels
+
+
+def build_batch(chunk, modality, processor, max_length):
+    args = types.SimpleNamespace(max_length=max_length)
+    if modality == "mm":
+        items = [{"image": it["image"], "question": it["question"], "answer": it["answer"]} for it in chunk]
+        return train_collate_fn_llava_multimodal(items, processor, args)
+    items = [{"question": it["question"], "answer": it["answer"]} for it in chunk]
+    return train_collate_fn_llava_unimodal(items, processor, args)
+
+
+def batch_to_device(batch, modality, device):
+    ids, attn, pixel, labels = batch
+    ids, attn, labels = ids.to(device), attn.to(device), labels.to(device)
+    if modality == "mm" and pixel is not None:
+        pixel = pixel.to(device)
+    else:
+        pixel = None
     return ids, attn, pixel, labels
 
 

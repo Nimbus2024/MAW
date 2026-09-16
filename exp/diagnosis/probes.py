@@ -19,7 +19,7 @@ from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from ..unlearn._paired import build_pairs, collate_plain
 from .adapter_geometry import load_adapter_ab
-from .patching import apply_delta, norm_name, target_modules
+from .patching import apply_delta, batch_to_device, build_batch, norm_name, target_modules
 
 
 def samples(data_split_dir, split, n_entities, per_entity, modality, processor, max_length, seed=42):
@@ -45,19 +45,9 @@ def hidden_pool(model, items, processor, layers, device, max_length, batch_size=
     reps = {L: [] for L in layers}
     for b in range(0, len(items), batch_size):
         chunk = items[b:b + batch_size]
-        args = types.SimpleNamespace(max_length=max_length)
-        items_c = [{"mm": {"image": it["image"], "question": it["question"], "answer": it["answer"]},
-                    "um": {"question": it["question"], "answer": it["answer"]}} for it in chunk]
-        batch = collate_plain(items_c, processor, args)
-        mm, um = batch["mm"], batch["um"]
-        if chunk[0]["image"] is not None:
-            ids, attn, pixel, labels = mm
-        else:
-            ids, attn, _, labels = um
-            pixel = None
-        ids, attn, labels = ids.to(device), attn.to(device), labels.to(device)
-        if pixel is not None:
-            pixel = pixel.to(device)
+        modality = "mm" if chunk[0]["image"] is not None else "um"
+        batch = build_batch(chunk, modality, processor, max_length)
+        ids, attn, pixel, labels = batch_to_device(batch, modality, device)
         out = model(input_ids=ids, attention_mask=attn, pixel_values=pixel,
                     output_hidden_states=True, use_cache=False)
         mask = labels.ne(-100).unsqueeze(-1).float()

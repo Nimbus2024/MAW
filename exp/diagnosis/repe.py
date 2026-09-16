@@ -16,7 +16,8 @@ from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from ..unlearn._paired import build_pairs, collate_plain
 from .adapter_geometry import load_adapter_ab
-from .patching import apply_delta, get_layers, norm_name, target_modules, to_device
+from .patching import (apply_delta, batch_to_device, build_batch, get_layers,
+                       norm_name, target_modules)
 
 
 def samples(data_split_dir, split, n_entities, per_entity, modality, seed=42):
@@ -36,21 +37,15 @@ def samples(data_split_dir, split, n_entities, per_entity, modality, seed=42):
 
 
 def batches(items, modality, processor, max_length, batch_size=4):
-    args = types.SimpleNamespace(max_length=max_length)
-    out = []
-    for b in range(0, len(items), batch_size):
-        chunk = items[b:b + batch_size]
-        ic = [{"mm": {"image": it["image"], "question": it["question"], "answer": it["answer"]},
-               "um": {"question": it["question"], "answer": it["answer"]}} for it in chunk]
-        out.append(collate_plain(ic, processor, args))
-    return out
+    return [build_batch(items[b:b + batch_size], modality, processor, max_length)
+            for b in range(0, len(items), batch_size)]
 
 
 @torch.no_grad()
 def mean_rep(model, bs, modality, layer, device):
     reps = []
     for batch in bs:
-        ids, attn, pixel, labels = to_device(batch, modality, device)
+        ids, attn, pixel, labels = batch_to_device(batch, modality, device)
         out = model(input_ids=ids, attention_mask=attn, pixel_values=pixel,
                     output_hidden_states=True, use_cache=False)
         h = out.hidden_states[layer].float()
@@ -68,7 +63,7 @@ def ce_with_dir(model, bs, modality, layer, direction, alpha, device):
             return (x + alpha * direction.to(x.device, x.dtype),)
         h = get_layers(model)[layer].register_forward_pre_hook(hook)
         try:
-            ids, attn, pixel, labels = to_device(batch, modality, device)
+            ids, attn, pixel, labels = batch_to_device(batch, modality, device)
             total += float(model(input_ids=ids, attention_mask=attn, pixel_values=pixel, labels=labels).loss)
             n += 1
         finally:
