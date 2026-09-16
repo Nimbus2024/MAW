@@ -62,13 +62,11 @@ def probe_batches(data_split_dir: str, split: str, n_batches: int, batch_size: i
 
 def to_device(batch, modality, device):
     mm, um = batch["mm"], batch["um"]
-    if modality == "it":
+    if modality == "mm":
         ids, attn, pixel, labels = mm
-    elif modality == "pt":
+    else:
         ids, attn, _, labels = um
         pixel = None
-    else:
-        ids, attn, pixel, labels = mm
     ids, attn, labels = ids.to(device), attn.to(device), labels.to(device)
     if pixel is not None:
         pixel = pixel.to(device)
