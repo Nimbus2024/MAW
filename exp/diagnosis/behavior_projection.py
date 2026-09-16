@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import types
 from pathlib import Path
@@ -24,7 +25,7 @@ import torch.nn.functional as F
 from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from ..unlearn._paired import build_pairs, collate_plain
-from .adapter_geometry import load_adapter
+from .adapter_geometry import load_adapter_ab
 
 TARGET_SUFFIXES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
@@ -146,35 +147,58 @@ def main():
         grads[behavior] = behavior_gradient(model, modules, probe[behavior], modality, args.device)
         print(f"computed G_{behavior}", flush=True)
 
-    adapters = {}
-    for item in args.adapters.split(","):
-        name, path = item.split("=", 1)
-        deltas, _ = load_adapter(Path(path))
-        adapters[name] = {norm_name(k): v for k, v in deltas.items()}
+    for b in grads:
+        grads[b] = {k: v.to(torch.bfloat16) for k, v in grads[b].items()}
+    if args.device.startswith("cuda"):
+        torch.cuda.empty_cache()
 
-    keys = sorted(set(modules) & set(grads["it"]) & set(adapters[list(adapters)[0]]))
+    behaviors = ("it", "pt", "gen")
+    keys = sorted(set(modules) & set(grads["it"]))
     result = {"keys": keys, "adapters": {}}
-    for aname, deltas in adapters.items():
-        d_all = flatten_join(deltas, keys)
-        g_all = {b: flatten_join(grads[b], keys) for b in grads}
-        gmat = torch.stack([g_all["it"], g_all["pt"], g_all["gen"]], dim=1)  # [P,3]
-        q, _ = torch.linalg.qr(gmat)
-        coeffs = q.T @ d_all
-        proj = q @ coeffs
+    for item in args.adapters.split(","):
+        aname, path = item.split("=", 1)
+        ab, scaling = load_adapter_ab(Path(path))
+        ab = {norm_name(k): v for k, v in ab.items()}
+        common = [k for k in keys if k in ab]
+        norm_d2 = 0.0
+        norm_g2 = {b: 0.0 for b in behaviors}
+        dot = {b: 0.0 for b in behaviors}
+        gram = {(i, j): 0.0 for i in behaviors for j in behaviors}
+        for m in common:
+            A, B = ab[m]
+            dW = scaling * (B @ A)
+            norm_d2 += float((dW * dW).sum())
+            gs = {b: grads[b][m].float() for b in behaviors}
+            for b in behaviors:
+                dot[b] += float((gs[b] * dW).sum())
+                norm_g2[b] += float((gs[b] * gs[b]).sum())
+            for i in behaviors:
+                for j in behaviors:
+                    gram[(i, j)] += float((gs[i] * gs[j]).sum())
+        m_mat = torch.tensor([[gram[(i, j)] for j in behaviors] for i in behaviors],
+                             dtype=torch.float64)
+        b_vec = torch.tensor([dot[b] for b in behaviors], dtype=torch.float64)
+        try:
+            coeffs = torch.linalg.solve(m_mat, b_vec)
+            proj_energy = float(b_vec @ coeffs)
+        except Exception:
+            coeffs = torch.zeros(3, dtype=torch.float64)
+            proj_energy = 0.0
+        nd = math.sqrt(norm_d2) if norm_d2 > 0 else 0.0
         per_behavior = {}
-        for b in grads:
-            g = g_all[b]
-            ng, nd = g.norm(), d_all.norm()
+        for b in behaviors:
+            ng = math.sqrt(norm_g2[b])
             per_behavior[b] = {
-                "cos": float((d_all @ g) / (ng * nd)) if ng > 0 and nd > 0 else None,
-                "energy_frac": float(((d_all @ g) ** 2) / (ng ** 2 * nd ** 2)) if ng > 0 and nd > 0 else None,
+                "cos": dot[b] / (ng * nd) if ng > 0 and nd > 0 else None,
+                "energy_frac": (dot[b] ** 2) / (norm_g2[b] * norm_d2) if ng > 0 and nd > 0 else None,
             }
         result["adapters"][aname] = {
-            "norm": float(d_all.norm()),
+            "norm": nd,
+            "n_modules": len(common),
             "per_behavior": per_behavior,
-            "subspace_coeffs": {b: float(c) for b, c in zip(("it", "pt", "gen"), coeffs)},
-            "subspace_energy_frac": float((proj.norm() ** 2) / (d_all.norm() ** 2)) if d_all.norm() > 0 else None,
-            "residual_frac": float(1 - (proj.norm() ** 2) / (d_all.norm() ** 2)) if d_all.norm() > 0 else None,
+            "subspace_coeffs": {b: float(x) for b, x in zip(behaviors, coeffs)},
+            "subspace_energy_frac": proj_energy / norm_d2 if norm_d2 > 0 else None,
+            "residual_frac": 1 - proj_energy / norm_d2 if norm_d2 > 0 else None,
         }
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

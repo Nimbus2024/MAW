@@ -34,6 +34,19 @@ def load_adapter(directory: Path):
     return deltas, scaling
 
 
+def load_adapter_ab(directory: Path):
+    cfg = json.loads((directory / "adapter_config.json").read_text(encoding="utf-8"))
+    weights = load_file(str(directory / "adapter_model.safetensors"))
+    scaling = float(cfg.get("lora_alpha", 1.0)) / float(cfg.get("r", 1))
+    keys = {}
+    for name, tensor in weights.items():
+        match = re.match(r"(.+)\.lora_(A|B)\.weight$", name)
+        if not match:
+            continue
+        keys.setdefault(match.group(1), {})[match.group(2)] = tensor.float()
+    return {m: (p["A"], p["B"]) for m, p in keys.items() if "A" in p and "B" in p}, scaling
+
+
 def layer_of(module: str):
     match = re.search(r"layers\.(\d+)\.", module)
     if match:
