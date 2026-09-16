@@ -2,15 +2,13 @@
 """Activation patching 行为定位。
 
 逐层把 oracle(base) 的层输入激活换进 unlearned 模型, 测 IT / PT 两个行为上的恢复。
-指标二选一:
-  --metric ce  : 答案 token 的 CE (recovery = unlearned_CE - patched_CE, 越大越恢复)
-  --metric gen : 贪心生成后 fuzzy 判分命中率 (recovery = patched_acc - unlearned_acc)
+  --metric ce  : 答案 token CE (recovery = unlearned_CE - patched_CE, 越大越恢复)
+  --metric gen : 纯提示贪心生成 + fuzzy 判分命中率 (recovery = patched_acc - unlearned_acc)
 """
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import types
 from pathlib import Path
 
@@ -44,21 +42,30 @@ def target_modules(model):
     return out
 
 
-def probe_batches(data_split_dir, split, n, batch_size, processor, max_length, seed=42):
+def load_pairs(data_split_dir, split, n, seed=42):
     pairs = build_pairs(pd.read_parquet(Path(data_split_dir) / split / "train-00000-of-00001.parquet"))
     order = torch.randperm(len(pairs), generator=torch.Generator().manual_seed(seed)).tolist()
-    pairs = [pairs[i] for i in order[:n]]
+    return [pairs[i] for i in order[:n]]
+
+
+def ce_probes(pairs, processor, max_length, batch_size):
     args = types.SimpleNamespace(max_length=max_length)
-    items, answers = [], {"mm": [], "um": []}
-    for p in pairs:
-        items.append({"mm": {"image": p["image"], "question": p["mm_q"], "answer": p["mm_a"]},
-                      "um": {"question": p["um_q"], "answer": p["um_a"]}})
-        answers["mm"].append(p["mm_a"])
-        answers["um"].append(p["um_a"])
+    items = [{"mm": {"image": p["image"], "question": p["mm_q"], "answer": p["mm_a"]},
+              "um": {"question": p["um_q"], "answer": p["um_a"]}} for p in pairs]
     out = []
     for b in range(0, len(items), batch_size):
         out.append({"batch": collate_plain(items[b:b + batch_size], processor, args),
-                    "answers": {m: answers[m][b:b + batch_size] for m in ("mm", "um")}})
+                    "answers": {m: [it[m]["answer"] for it in items[b:b + batch_size]] for m in ("mm", "um")}})
+    return out
+
+
+def gen_items(pairs, modality):
+    out = []
+    for p in pairs:
+        if modality == "mm":
+            out.append({"prompt": f"USER: <image>\n{p['mm_q']}\nASSISTANT:", "image": p["image"], "answer": p["mm_a"]})
+        else:
+            out.append({"prompt": f"USER: {p['um_q']}\nASSISTANT:", "image": None, "answer": p["um_a"]})
     return out
 
 
@@ -75,6 +82,12 @@ def to_device(batch, modality, device):
     return ids, attn, pixel, labels
 
 
+def tokenize(item, modality, processor, device):
+    images = [item["image"]] if modality == "mm" else None
+    inputs = processor(text=[item["prompt"]], images=images, return_tensors="pt")
+    return {k: v.to(device) for k, v in inputs.items()}
+
+
 @torch.no_grad()
 def ce_loss(model, batch, modality, device):
     ids, attn, pixel, labels = to_device(batch, modality, device)
@@ -82,24 +95,49 @@ def ce_loss(model, batch, modality, device):
 
 
 @torch.no_grad()
-def cache_layer_inputs(model, probes, modality, layers, device):
+def ce_baseline(model, probes, modality, device):
+    return sum(ce_loss(model, it["batch"], modality, device) for it in probes) / len(probes)
+
+
+@torch.no_grad()
+def gen_baseline(model, items, modality, device, max_new_tokens, processor):
+    total = 0.0
+    for it in items:
+        inputs = tokenize(it, modality, processor, device)
+        out = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        gen = processor.batch_decode(out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        total += _judge_answer(gen[0], it["answer"])
+    return total / len(items)
+
+
+@torch.no_grad()
+def cache_ce_inputs(model, probes, modality, layers, device):
     cache = {}
-    handles = []
-    for li in layers:
-        def make(idx):
-            def hook(module, args):
-                cache.setdefault(idx, []).append(args[0].detach().clone())
-            return hook
-        handles.append(get_layers(model)[li].register_forward_pre_hook(make(li)))
-    for item in probes:
-        ids, attn, pixel, _ = to_device(item["batch"], modality, device)
+    handles = [get_layers(model)[li].register_forward_pre_hook(
+        (lambda idx: (lambda m, a: cache.setdefault(idx, []).append(a[0].detach().clone())))(li))
+        for li in layers]
+    for it in probes:
+        ids, attn, pixel, _ = to_device(it["batch"], modality, device)
         model(input_ids=ids, attention_mask=attn, pixel_values=pixel)
     for h in handles:
         h.remove()
     return cache
 
 
-def _patched_call(model, item, modality, layer, ref, device, metric, max_new_tokens, processor):
+@torch.no_grad()
+def cache_gen_inputs(model, items, modality, layers, device, processor):
+    cache = {}
+    handles = [get_layers(model)[li].register_forward_pre_hook(
+        (lambda idx: (lambda m, a: cache.setdefault(idx, []).append(a[0].detach().clone())))(li))
+        for li in layers]
+    for it in items:
+        model(**tokenize(it, modality, processor, device))
+    for h in handles:
+        h.remove()
+    return cache
+
+
+def _hook_ref(model, layer, ref):
     state = {"done": False}
 
     def hook(module, args):
@@ -107,16 +145,26 @@ def _patched_call(model, item, modality, layer, ref, device, metric, max_new_tok
             return None
         state["done"] = True
         return (ref.to(args[0].device, args[0].dtype),)
+    return get_layers(model)[layer].register_forward_pre_hook(hook)
 
-    h = get_layers(model)[layer].register_forward_pre_hook(hook)
+
+@torch.no_grad()
+def ce_patched(model, batch, modality, layer, ref, device):
+    h = _hook_ref(model, layer, ref)
     try:
-        ids, attn, pixel, labels = to_device(item["batch"], modality, device)
-        if metric == "ce":
-            return float(model(input_ids=ids, attention_mask=attn, pixel_values=pixel, labels=labels).loss)
-        out = model.generate(input_ids=ids, attention_mask=attn, pixel_values=pixel,
-                             max_new_tokens=max_new_tokens, do_sample=False)
-        gen = processor.batch_decode(out[:, ids.shape[1]:], skip_special_tokens=True)
-        return sum(_judge_answer(g, a) for g, a in zip(gen, item["answers"][modality])) / len(gen)
+        return ce_loss(model, batch, modality, device)
+    finally:
+        h.remove()
+
+
+@torch.no_grad()
+def gen_patched(model, item, modality, layer, ref, device, max_new_tokens, processor):
+    inputs = tokenize(item, modality, processor, device)
+    h = _hook_ref(model, layer, ref)
+    try:
+        out = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        gen = processor.batch_decode(out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        return _judge_answer(gen[0], item["answer"])
     finally:
         h.remove()
 
@@ -130,21 +178,6 @@ def apply_delta(modules, ab, scaling, sign=1.0):
         module.weight.data.add_(dW, alpha=sign)
 
 
-@torch.no_grad()
-def baseline_metric(model, probes, modality, device, metric, max_new_tokens, processor):
-    if metric == "ce":
-        return sum(ce_loss(model, it["batch"], modality, device) for it in probes) / len(probes)
-    total, n = 0.0, 0
-    for item in probes:
-        ids, attn, pixel, _ = to_device(item["batch"], modality, device)
-        out = model.generate(input_ids=ids, attention_mask=attn, pixel_values=pixel,
-                             max_new_tokens=max_new_tokens, do_sample=False)
-        gen = processor.batch_decode(out[:, ids.shape[1]:], skip_special_tokens=True)
-        total += sum(_judge_answer(g, a) for g, a in zip(gen, item["answers"][modality])) / len(gen)
-        n += 1
-    return total / max(n, 1)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Activation patching 行为定位")
     parser.add_argument("--base", required=True)
@@ -152,9 +185,9 @@ def main():
     parser.add_argument("--data_split_dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--metric", choices=("ce", "gen"), default="ce")
-    parser.add_argument("--layers", default="0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,31")
-    parser.add_argument("--n", type=int, default=16)
-    parser.add_argument("--batch_size", type=int, default=2)
+    parser.add_argument("--layers", default="0,4,8,12,16,20,24,28,31")
+    parser.add_argument("--n", type=int, default=40)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument("--max_new_tokens", type=int, default=24)
     parser.add_argument("--forget_split", default="forget_5")
@@ -171,40 +204,44 @@ def main():
     model.eval()
     model.config.use_cache = False
     modules = target_modules(model)
-    print(f"modules={len(modules)} metric={args.metric} layers={layers}", flush=True)
+    pairs = load_pairs(args.data_split_dir, args.forget_split, args.n, args.seed)
 
-    probes = {m: probe_batches(args.data_split_dir, args.forget_split, args.n,
-                               args.batch_size, processor, args.max_length, args.seed)
-              for m in ("mm", "um")}
-    base_m = {m: baseline_metric(model, probes[m], m, args.device, args.metric,
-                                 args.max_new_tokens, processor) for m in ("mm", "um")}
-    print(f"base {args.metric}: {base_m}", flush=True)
-    cache = {m: cache_layer_inputs(model, probes[m], m, layers, args.device) for m in ("mm", "um")}
-    print("cached base layer inputs", flush=True)
+    # base 参照的层输入缓存（按模态）
+    if args.metric == "ce":
+        probes_all = {m: ce_probes(pairs, processor, args.max_length, args.batch_size) for m in ("mm", "um")}
+        cache = {m: cache_ce_inputs(model, probes_all[m], m, layers, args.device) for m in ("mm", "um")}
+        base_metric = {m: ce_baseline(model, probes_all[m], m, args.device) for m in ("mm", "um")}
+    else:
+        items_all = {m: gen_items(pairs, m) for m in ("mm", "um")}
+        cache = {m: cache_gen_inputs(model, items_all[m], m, layers, args.device, processor) for m in ("mm", "um")}
+        base_metric = {m: gen_baseline(model, items_all[m], m, args.device, args.max_new_tokens, processor)
+                       for m in ("mm", "um")}
+    print(f"base {args.metric}: {base_metric}", flush=True)
 
-    result = {"metric": args.metric, "layers": layers, "base": base_m, "adapters": {}}
+    result = {"metric": args.metric, "layers": layers, "base": base_metric, "adapters": {}}
     for item in args.adapters.split(","):
         name, path = item.split("=", 1)
         ab, scaling = load_adapter_ab(Path(path))
         ab = {norm_name(k): v for k, v in ab.items()}
         apply_delta(modules, ab, scaling, +1.0)
-        unl = {m: baseline_metric(model, probes[m], m, args.device, args.metric,
-                                  args.max_new_tokens, processor) for m in ("mm", "um")}
         per_mod = {}
         for m in ("mm", "um"):
-            patched = []
-            for L in layers:
-                vals = [_patched_call(model, it, m, L, cache[m][L][i], args.device, args.metric,
-                                      args.max_new_tokens, processor)
-                        for i, it in enumerate(probes[m])]
-                patched.append(sum(vals) / len(vals))
-            per_mod[m] = {"unlearned": unl[m],
-                          "patched": {str(L): v for L, v in zip(layers, patched)},
-                          "recovery": {str(L): (unl[m] - v if args.metric == "ce" else v - unl[m])
-                                       for L, v in zip(layers, patched)}}
+            if args.metric == "ce":
+                unl = ce_baseline(model, probes_all[m], m, args.device)
+                patched = [sum(ce_patched(model, it["batch"], m, L, cache[m][L][i], args.device)
+                               for i, it in enumerate(probes_all[m])) / len(probes_all[m]) for L in layers]
+                rec = {str(L): unl - v for L, v in zip(layers, patched)}
+            else:
+                unl = gen_baseline(model, items_all[m], m, args.device, args.max_new_tokens, processor)
+                patched = [sum(gen_patched(model, it, m, L, cache[m][L][i], args.device,
+                                           args.max_new_tokens, processor)
+                               for i, it in enumerate(items_all[m])) / len(items_all[m]) for L in layers]
+                rec = {str(L): v - unl for L, v in zip(layers, patched)}
+            per_mod[m] = {"unlearned": unl, "patched": {str(L): v for L, v in zip(layers, patched)},
+                          "recovery": rec}
         apply_delta(modules, ab, scaling, -1.0)
         result["adapters"][name] = per_mod
-        print(f"{name}: unlearned={unl}", flush=True)
+        print(f"{name}: unlearned={ {m: round(per_mod[m]['unlearned'],4) for m in per_mod} }", flush=True)
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -213,7 +250,7 @@ def main():
     for L in layers:
         it = [result["adapters"][a]["mm"]["recovery"][str(L)] for a in result["adapters"]]
         pt = [result["adapters"][a]["um"]["recovery"][str(L)] for a in result["adapters"]]
-        print(f"{L:>5} {sum(it)/len(it):>12.3f} {sum(pt)/len(pt):>12.3f}")
+        print(f"{L:>5} {sum(it)/len(it):>12.4f} {sum(pt)/len(pt):>12.4f}")
     print(f"saved: {out}")
 
 
