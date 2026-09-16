@@ -9,6 +9,7 @@ policy = origin(SFT/llava_smu_ft) + LoRA; ref = 冻结的 origin。单模态项�
 逐 epoch 保存到 <run>/runs/<epoch>/model, 最终 <run>/model 为末 epoch 软链。
 """
 import os
+import re
 import sys
 import json
 import random
@@ -37,6 +38,16 @@ from .unlearn_dataset import (
     train_collate_fn_llava_multimodal,
     train_collate_fn_llava_unimodal,
 )
+
+
+def filter_lora_layers(names, spec):
+    lo, hi = (int(x) for x in spec.split("-"))
+    out = []
+    for n in names:
+        m = re.search(r"language_model\.layers\.(\d+)\.", n)
+        if m and lo <= int(m.group(1)) <= hi:
+            out.append(n)
+    return out
 
 
 def _load_llava(args):
@@ -191,9 +202,12 @@ def main(args):
     model, processor = load_model_and_processor(args)
     ref_model = load_reference_model(args)
 
+    targets = find_all_linear_names(model)
+    if args.lora_layers:
+        targets = filter_lora_layers(targets, args.lora_layers)
     lora_config = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.05,
-        target_modules=find_all_linear_names(model), init_lora_weights="gaussian")
+        target_modules=targets, init_lora_weights="gaussian")
     args.lora_dropout = lora_config.lora_dropout
     args.lora_target_modules = sorted(lora_config.target_modules)
     model = get_peft_model(model, lora_config)
@@ -364,6 +378,8 @@ if __name__ == "__main__":
     parser.add_argument("--gamma", type=float, default=0.0)
     parser.add_argument("--alpha", type=float, default=1.0,
                         help="单模态 forget 项权重")
+    parser.add_argument("--lora_layers", type=str, default=None,
+                        help="限制 LoRA 到指定层范围, 如 '0-9' 或 '22-31'")
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--gradient_checkpointing", action="store_true",
