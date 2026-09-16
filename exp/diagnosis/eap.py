@@ -48,14 +48,27 @@ def layer_inputs(model, items, modality, layers, device, processor, max_length):
 def layer_grads(model, items, modality, layers, device, processor, max_length):
     caps, grads = {}, {}
     handles = []
+    first = min(layers)
+
+    def make_first(idx):
+        def hook(module, args):
+            x = args[0].detach().requires_grad_(True)
+            x.retain_grad()
+            caps[idx] = x
+            return (x,)
+        return hook
+
+    def make_keep(idx):
+        def hook(module, args):
+            x = args[0]
+            x.retain_grad()
+            caps[idx] = x
+        return hook
+
+    handles.append(get_layers(model)[first].register_forward_pre_hook(make_first(first)))
     for L in layers:
-        def make(idx):
-            def hook(module, args):
-                x = args[0].detach().requires_grad_(True)
-                caps[idx] = x
-                return (x,)
-            return hook
-        handles.append(get_layers(model)[L].register_forward_pre_hook(make(L)))
+        if L != first:
+            handles.append(get_layers(model)[L].register_forward_pre_hook(make_keep(L)))
     for b in range(0, len(items), 2):
         batch = build_batch(items[b:b + 2], modality, processor, max_length)
         ids, attn, pixel, labels = batch_to_device(batch, modality, device)
