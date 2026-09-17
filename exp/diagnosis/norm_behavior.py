@@ -114,23 +114,13 @@ def main():
         pairs = load_pairs(args.data_split_dir, sp, args.n, args.seed)
         probes[sp] = ce_probes(pairs, processor, args.max_length, args.batch_size)
 
-    models = {"base": base}
-    adapter_list = [it.split("=", 1) for it in args.adapters.split(",") if it]
-    if adapter_list:
-        peft = PeftModel.from_pretrained(base, adapter_list[0][1], adapter_name=adapter_list[0][0])
-        peft.eval()
-        for name, path in adapter_list[1:]:
-            peft.load_adapter(path, adapter_name=name)
-        models = {"base": base, **{n: peft for n, _ in adapter_list}}
-
     result = {"layers": layers, "alphas": alphas, "n": args.n, "models": {}}
-    for name in models:
-        if name != "base":
-            models[name].set_adapter(name)
+
+    def run_model(model, name):
         entry = {}
         for sp in splits:
             for mod in modalities:
-                st = stats_batches(models[name], probes[sp], mod, layers, args.device)
+                st = stats_batches(model, probes[sp], mod, layers, args.device)
                 e = {"ce_mean": float(st["ce"].mean()), "n": int(st["ce"].numel()),
                      "corr": {}, "intervention": {}}
                 for L in layers:
@@ -141,12 +131,26 @@ def main():
                         "norm_mean_mean": float(st["norm_mean"][L].mean()),
                     }
                     e["intervention"][str(L)] = {
-                        str(a): mean_ce(models[name], probes[sp], mod, args.device, L, a)
+                        str(a): mean_ce(model, probes[sp], mod, args.device, L, a)
                         for a in alphas}
                 entry[f"{sp}|{mod}"] = e
                 print(f"{name} {sp}|{mod}: ce={e['ce_mean']:.4f}", flush=True)
-        result["models"][name] = entry
         print(f"[{name} done]", flush=True)
+        return entry
+
+    # base 必须在 PeftModel.from_pretrained 之前跑: PEFT 会原地包装 base,
+    # 之后 base 的前向也会带上 adapter。
+    result["models"]["base"] = run_model(base, "base")
+
+    adapter_list = [it.split("=", 1) for it in args.adapters.split(",") if it]
+    if adapter_list:
+        peft = PeftModel.from_pretrained(base, adapter_list[0][1], adapter_name=adapter_list[0][0])
+        peft.eval()
+        for name, path in adapter_list[1:]:
+            peft.load_adapter(path, adapter_name=name)
+        for name, _ in adapter_list:
+            peft.set_adapter(name)
+            result["models"][name] = run_model(peft, name)
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
