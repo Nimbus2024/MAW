@@ -130,7 +130,7 @@ def main():
         entry = {}
         for sp in splits:
             for mod in modalities:
-                st = stats_batches(models[name], probes[sp][mod], mod, layers, args.device)
+                st = stats_batches(models[name], probes[sp], mod, layers, args.device)
                 e = {"ce_mean": float(st["ce"].mean()), "n": int(st["ce"].numel()),
                      "corr": {}, "intervention": {}}
                 for L in layers:
@@ -141,7 +141,7 @@ def main():
                         "norm_mean_mean": float(st["norm_mean"][L].mean()),
                     }
                     e["intervention"][str(L)] = {
-                        str(a): mean_ce(models[name], probes[sp][mod], mod, args.device, L, a)
+                        str(a): mean_ce(models[name], probes[sp], mod, args.device, L, a)
                         for a in alphas}
                 entry[f"{sp}|{mod}"] = e
                 print(f"{name} {sp}|{mod}: ce={e['ce_mean']:.4f}", flush=True)
