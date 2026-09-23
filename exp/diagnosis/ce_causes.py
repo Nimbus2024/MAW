@@ -42,10 +42,13 @@ def ce_tokens(model, items, modality, processor, device, max_length, batch_size)
 
 
 def agg_tokens(per_sample):
-    ce = torch.cat(per_sample) if per_sample else torch.zeros(1)
+    if not per_sample:
+        return {"tw": float("nan"), "mean": float("nan"), "n_tok": 0, "n": 0}
     nt = torch.tensor([t.numel() for t in per_sample], dtype=torch.float32)
-    tw = float((torch.tensor([float(t.sum()) for t in per_sample])).sum() / nt.sum()) if nt.sum() > 0 else float("nan")
-    return {"tw": tw, "mean": float(ce.mean()), "n_tok": int(nt.sum()), "n": len(per_sample)}
+    tot = float(sum(float(t.sum()) for t in per_sample))
+    tw = tot / float(nt.sum()) if nt.sum() > 0 else float("nan")
+    per_sample_ce = torch.tensor([float(t.mean()) if t.numel() else 0.0 for t in per_sample])
+    return {"tw": tw, "mean": float(per_sample_ce.mean()), "n_tok": int(nt.sum()), "n": len(per_sample)}
 
 
 def ce_cell(model, items, processor, device, max_length, batch_size):

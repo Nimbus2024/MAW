@@ -114,7 +114,14 @@ def tokenize(item, modality, processor, device):
 @torch.no_grad()
 def ce_loss(model, batch, modality, device):
     ids, attn, pixel, labels = to_device(batch, modality, device)
-    return float(model(input_ids=ids, attention_mask=attn, pixel_values=pixel, labels=labels).loss)
+    logits = model(input_ids=ids, attention_mask=attn, pixel_values=pixel).logits
+    lg = logits[:, :-1].float()
+    sl = labels[:, 1:]
+    ls = torch.nn.functional.cross_entropy(
+        lg.reshape(-1, lg.size(-1)), sl.reshape(-1), reduction="none").view(sl.shape)
+    m = sl != -100
+    per_sample = (ls * m).sum(1) / m.sum(1).clamp_min(1)
+    return float(per_sample.mean())
 
 
 @torch.no_grad()
