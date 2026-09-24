@@ -55,6 +55,7 @@ def main(args):
         low_cpu_mem_usage=True, local_files_only=True)
     processor = AutoProcessor.from_pretrained(args.processor, local_files_only=True)
     tokenizer = AutoTokenizer.from_pretrained(args.processor, local_files_only=True)
+    processor.num_additional_image_tokens = 1
     processor.tokenizer.padding_side = "right"
     processor.tokenizer.add_tokens(["<image>", "<pad>"], special_tokens=True)
     model.resize_token_embeddings(len(processor.tokenizer))
