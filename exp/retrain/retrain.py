@@ -79,6 +79,9 @@ def main(args):
     model, optimizer, dl, lr_scheduler = accelerator.prepare(model, optimizer, dl, lr_scheduler)
     writer = SummaryWriter(log_dir=tb_dir)
 
+    sides = tuple(s for s in args.modalities.split(",") if s)
+    print(f"Training modalities: {sides}")
+
     global_step = 0
     for epoch in range(args.num_epochs):
         model.train()
@@ -86,7 +89,7 @@ def main(args):
         bar = tqdm(dl, desc=f"Epoch {epoch+1}")
         for pair in bar:
             loss = 0.0
-            for side in ("mm", "um"):
+            for side in sides:
                 input_ids, attention_mask, pixel_values, labels = pair[side]
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask,
                                 pixel_values=pixel_values, labels=labels)
@@ -127,5 +130,7 @@ if __name__ == "__main__":
     ap.add_argument("--lora_r", type=int, default=64)
     ap.add_argument("--lora_alpha", type=int, default=16)
     ap.add_argument("--max_length", type=int, default=384)
+    ap.add_argument("--modalities", default="mm,um",
+                    help="参与训练的训练模态子集: mm,um / um / mm (H1 分布外对照用)")
     args = ap.parse_args()
     main(args)

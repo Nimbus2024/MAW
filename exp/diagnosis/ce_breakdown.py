@@ -134,6 +134,7 @@ def p2_tasks(model, split_dir, processor, device, max_length, batch_size):
 def main():
     ap = argparse.ArgumentParser(description="CE 尺度差异成因分解")
     ap.add_argument("--base", required=True)
+    ap.add_argument("--adapter", default=None, help="可选: 挂在 base 上的 LoRA (H1 分布外对照评测)")
     ap.add_argument("--data_split_dir", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--tasks", default="p1,p2")
@@ -148,6 +149,10 @@ def main():
         args.base, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
         local_files_only=True).to(args.device).eval()
     model.config.use_cache = False
+    if args.adapter:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, args.adapter).eval()
+        model.config.use_cache = False
 
     result = {}
     want = args.tasks.split(",")
