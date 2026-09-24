@@ -26,7 +26,7 @@ LR="${LR:-5e-5}"
 EPOCHS="${EPOCHS:-1}"
 BATCH="${BATCH:-6}"
 LORA_R="${LORA_R:-16}"
-LORA_A="${LORA_ALPHA:-32}"
+LORA_ALPHA="${LORA_ALPHA:-32}"
 MODS="${MODS:-um,both}"
 
 export TMPDIR="${TMPDIR:-${WORK_ROOT}/tmp}"
