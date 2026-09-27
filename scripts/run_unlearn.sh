@@ -13,6 +13,7 @@
 #   ./scripts/run_unlearn.sh MAW      --eval             # MAW 逐 epoch
 #   ./scripts/run_unlearn.sh NPO      --eval             # NPO 逐 epoch
 #   ./scripts/run_unlearn.sh simPO    --eval             # simPO 逐 epoch
+#   ./scripts/run_unlearn.sh DPO      --eval             # DPO 逐 epoch
 #   MAW_NPROC=4 ./scripts/run_unlearn.sh MAW --eval
 #   DATA_SPLIT_DIR=... MODEL_DIR=... ./scripts/run_unlearn.sh GA --eval
 #
@@ -25,7 +26,7 @@ set -euo pipefail
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
 METHOD="${1:-}"
-[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW|NPO|simPO> [--eval] [args...]" >&2; exit 1; }
+[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW|NPO|simPO|DPO> [--eval] [args...]" >&2; exit 1; }
 shift
 
 DO_EVAL=0
@@ -37,12 +38,12 @@ for arg in "$@"; do
   esac
 done
 
-# label↔模块: GA↔GA, KLmin↔KL, MAW/NPO/simPO↔同名模块
+# label↔模块: GA↔GA, KLmin↔KL, MAW/NPO/simPO/DPO↔同名模块
 case "${METHOD}" in
   GA)    MODULE="GA"; PER_EPOCH=1 ;;
   KLmin) MODULE="KL"; PER_EPOCH=1 ;;
-  MAW|NPO|simPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
-  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|NPO|simPO)" >&2; exit 1 ;;
+  MAW|NPO|simPO|DPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
+  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|NPO|simPO|DPO)" >&2; exit 1 ;;
 esac
 LABEL="${METHOD}"
 
@@ -111,9 +112,9 @@ echo "== 训练: exp.unlearn.${MODULE} =="
       --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
       "${TRAIN_ARGS[@]}"
   else
-    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); NPO/simPO/MAW(single) 有
+    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); NPO/simPO/DPO/MAW(single) 有
     extra=()
-    case "${MODULE}" in NPO|simPO|MAW) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
+    case "${MODULE}" in NPO|simPO|DPO|MAW) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
     "${PYTHON}" -m "exp.unlearn.${MODULE}" \
       --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
       --data_split_dir "${DATA_SPLIT_DIR}" \
