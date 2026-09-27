@@ -115,7 +115,7 @@ def collect_runs(label_dir):
     entries = []
     for ts in sorted(os.listdir(label_dir)):
         ts_dir = os.path.join(label_dir, ts)
-        if not os.path.isdir(ts_dir) or not re.fullmatch(r"\d{8}_\d{6}", ts):
+        if not os.path.isdir(ts_dir) or not re.fullmatch(r"\d{8}_\d{6}(?:-[\w.-]+)?", ts):
             continue
         cfg = {}
         cfg_file = os.path.join(ts_dir, "config", "args.json")
@@ -210,6 +210,11 @@ def _epoch_of(entry):
     return m.group(1) if m else None
 
 
+def _disp_ts(name):
+    m = re.match(r"\d{8}_\d{6}", name)
+    return m.group(0) if m else name
+
+
 def _best_worst(es, colspec):
     best, worst = {}, {}
     for ci, (g, t, m) in enumerate(colspec):
@@ -239,7 +244,7 @@ def metric_table(run_rows, header, colspec):
     for ts, es in groups:
         best, worst = _best_worst(es, colspec)
         for i, run in enumerate(es):
-            ts_cell = f"\\textbf{{{esc(ts)}}}" if i == 0 else ""
+            ts_cell = f"\\textbf{{{esc(_disp_ts(ts))}}}" if i == 0 else ""
             ep = _epoch_of(run) or ""
             cells = []
             for ci, (g, t, m) in enumerate(colspec):
@@ -271,25 +276,18 @@ def hyper_table(entries):
         by_ts.setdefault(os.path.basename(e[1]), e)
     run_entries = [by_ts[k] for k in sorted(by_ts)]
     cfgs = [e[2] for e in run_entries]
-    cols = []
-    for c in cfgs:
-        for k, v in c.items():
-            is_path = isinstance(v, str) and v.startswith("/")
-            if k not in cols and scalar(v) and not is_path and \
-                    all(scalar(cc.get(k)) and not (isinstance(cc.get(k), str)
-                                                    and cc.get(k).startswith("/"))
-                        for cc in cfgs):
-                cols.append(k)
+    cols = [k for k in CORE_HYPERPARAMS
+            if any(scalar(c.get(k)) for c in cfgs)]
     if not cols:
         cols = ["(no scalar hyperparameters)"]
     body = []
     for e in run_entries:
         cfg = e[2]
-        row = [f"\\textbf{{{esc(os.path.basename(e[1]))}}}"]
+        row = [f"\\textbf{{{esc(_disp_ts(os.path.basename(e[1])))}}}"]
         for k in cols:
-            row.append(esc(cfg.get(k, "")))
+            row.append(esc(cfg.get(k, "") if cfg.get(k) is not None else ""))
         body.append(" & ".join(row) + " \\\\")
-    head = "Run & " + " & ".join(esc(c) for c in cols) + " \\\\"
+    head = "Timestamp & " + " & ".join(esc(c) for c in cols) + " \\\\"
     ncols = len(cols) + 1
     return (f"\\begin{{table}}[H]\n\\centering\n\\resizebox{{\\linewidth}}{{!}}{{%\n"
             f"\\begin{{tabular}}{{l{'c'*(ncols-1)}}}\n\\toprule\n{head}\n\\midrule\n"
@@ -315,6 +313,10 @@ def label_section(label, entries):
 
 GROUPS = ("Forget", "Retain", "Real")
 TASKS = ("Fill", "Classif", "Gen")
+CORE_HYPERPARAMS = ("lr", "beta", "alpha", "gamma", "rho", "lmbda",
+                    "num_epochs", "max_steps", "max_length",
+                    "batch_size", "global_batch_size", "num_processes",
+                    "lora_r", "lora_alpha", "lora_dropout", "forget_split_ratio")
 AGG_COLSPEC = [(g, t, "All") for g in GROUPS for t in TASKS]
 PM_COLSPEC = [(g, t, m) for g in GROUPS for t in TASKS for m in ("IT", "PT")]
 
