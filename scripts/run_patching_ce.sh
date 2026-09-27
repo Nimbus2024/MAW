@@ -30,7 +30,7 @@ cd "${CODE_ROOT}"
 echo "== patching CE n=${N} batch=${BATCH} -> ${OUT_DIR}/patching_ce_full.json =="
 CUDA_VISIBLE_DEVICES="${GPU}" python -m exp.diagnosis.patching \
   --base "${DEP_ROOT}/models/llava_smu_ft" \
-  --adapters "mm=${RESULTS_ROOT}/simNPO/20260915_141455-mm/model,um=${RESULTS_ROOT}/simNPO/20260915_142326-um/model,joint=${RESULTS_ROOT}/simNPO/20260915_133541/model" \
+  --adapters "mm=${RESULTS_ROOT}/NPO/20260915_141455-mm/model,um=${RESULTS_ROOT}/NPO/20260915_142326-um/model,joint=${RESULTS_ROOT}/NPO/20260915_133541/model" \
   --data_split_dir "${DEP_ROOT}/data/UMU-bench" \
   --output "${OUT_DIR}/patching_ce_full.json" \
   --metric ce --n "${N}" --batch_size "${BATCH}" --layers "${LAYERS}" \

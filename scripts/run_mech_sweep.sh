@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 机制实验批量训练+评估+统计 (E1 模态隔离 / E6 alpha 扫描 共用)。
-# 每个配置: 训练 simNPO (--grad_log) -> 逐 epoch forget 集评估 (--dump_details)
+# 每个配置: 训练 NPO (--grad_log) -> 逐 epoch forget 集评估 (--dump_details)
 # -> 实体级 Δ 统计 (exp.diagnosis.stats)。清单写入 results/_analysis/mech_runs.tsv。
 #
 # 用法 (code/ 内, tmux, 有卡):
@@ -24,7 +24,7 @@ VANILLA_DIR="${VANILLA_DIR:-${MODEL_DIR}/llava-1.5-7b-hf}"
 TASK_DATA="${DATA_SPLIT_DIR}/full_data/train-00000-of-00001.parquet"
 CELEB_DATA="${DATA_SPLIT_DIR}/real_person/train-00000-of-00001.parquet"
 
-METHOD="${METHOD:-simNPO}"
+METHOD="${METHOD:-NPO}"
 LABEL="${LABEL:-${METHOD}}"
 NPROC="${NPROC:-2}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
@@ -112,7 +112,7 @@ for alpha in ${ALPHAS}; do
   else
     (
       cd "${CODE_ROOT}"
-      "${PYTHON}" -m exp.unlearn.simNPO \
+      "${PYTHON}" -m exp.unlearn.NPO \
         --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
         --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
         --forget_split_ratio "${FORGET_RATIO}" --batch_size "${BS}" --lr "${LR}" \

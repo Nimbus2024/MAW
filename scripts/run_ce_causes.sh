@@ -6,7 +6,7 @@
 # P4: vanilla(原始 LLaVA) vs origin(SMU-SFT) 的 IT/PT CE 比
 # P5: 长答案 (bio) 的逐 token 位置 CE 曲线
 #
-# 口径说明: simNPO 的 loss 用 _sequence_logprob(normalize=True) -> 逐样本长度归一化
+# 口径说明: NPO 的 loss 用 _sequence_logprob(normalize=True) -> 逐样本长度归一化
 # log-prob, 再对 batch 内样本求平均。故 CE 报告口径 = 逐问题 CE 的问题平均,
 # 不是 HF .loss 的 batch 内 token 加权。
 # =============================================================================

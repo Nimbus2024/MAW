@@ -11,8 +11,8 @@
 ├── scripts/                 # 批处理脚本：setup_env.sh(建环境) / run_unlearn.sh / run_retrain.sh / run_eval.sh
 └── exp/                     # 实验功能程序（Python 包，以 python -m exp.<task>.<mod> 运行）
     ├── finetune/            # 微调（ft_dataset / finetune / info_pre）
-    ├── unlearn/             # 遗忘方法：GA.py / KL.py / MAW.py / simNPO.py / simPO.py
-    │                        #   (实验 label: GA / KLmin / MAW / simNPO / simPO)
+    ├── unlearn/             # 遗忘方法：GA.py / KL.py / MAW.py / NPO.py / simPO.py
+    │                        #   (实验 label: GA / KLmin / MAW / NPO / simPO)
     │                        #   共享 unlearn_dataset.py
     ├── retrain/             # 重训练（上界对比，label retrain）
     └── eval/                # 评估（eval_vllm.py 为主；eval_vllm_benchmark.py / eval.py 参考）
@@ -21,9 +21,10 @@
 术语：**vanilla** = 原始基座 `llava-1.5-7b-hf`；**origin** = 微调基线 `llava_smu_ft`
 （参考项目称 oracle）。
 
-simNPO / simPO（简化 NPO / SimPO 式遗忘，均无参考模型、长度归一化，逐 epoch 存
-`runs/<epoch>/model`）：simNPO 对 forget 答案 `L=−E[(2/β)logσ(−β·r(y|x)−γ)]`，
-`r=(1/|y|)Σlogπ_θ`；simPO 对 DPO 对 (idk, forget)
+NPO / simPO（逐 epoch 存 `runs/<epoch>/model`）：
+NPO 用冻结参考模型的 log-ratio（对齐官方 NPO），
+`r=(1/|y|)Σ[logπ_θ−logπ_ref]`，`L=−E[(2/β)logσ(−β·r−γ)]`，默认 γ=0；
+simPO 对 DPO 对 (idk, forget) 无参考模型、长度归一化，
 `L=−E[(1/β)logσ(β·(r_idk−r_forget)−γ)]`。
 
 ## 环境配置（新服务器一键）
@@ -64,14 +65,14 @@ cd code
 ```bash
 ./scripts/run_unlearn.sh GA --num_epochs 3     # 训练（label GA）
 ./scripts/run_unlearn.sh MAW --eval            # 训练 + 逐 epoch 评估
-./scripts/run_unlearn.sh simNPO --eval         # simNPO 训练 + 逐 epoch 评估
+./scripts/run_unlearn.sh NPO --eval         # NPO 训练 + 逐 epoch 评估
 ./scripts/run_unlearn.sh simPO --beta 0.4 --gamma 0.0 --eval   # simPO
 ./scripts/run_retrain.sh --data_dir ...        # retrain 基线
 ./scripts/run_eval.sh origin --pretrain --model_id <本地模型目录>   # 评估独立模型
 ```
 
 产物规范（`results/<label>/<timestamp>/`）：`logs/{stdout.log,tensorboard/}`、
-`config/args.json`、`model/`（最终）；逐 epoch 方法（MAW/simNPO/simPO）
+`config/args.json`、`model/`（最终）；逐 epoch 方法（MAW/NPO/simPO）
 存 `runs/<epoch>/{model,metrics}`。
 
 ## 约定

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""simNPO.py — NPO unlearning (参考模型 log-ratio, 对齐官方实现)。
+"""NPO.py — NPO unlearning (参考模型 log-ratio, 对齐官方实现)。
 
 损失(在 forget 多模态 ∪ 单模态上, 每样本):
     r(x, y) = (1/|y|) * Σ_t [log π_θ(y_t|x,y_<t) - log π_ref(y_t|x,y_<t)]
@@ -79,7 +79,7 @@ def load_reference_model(args):
     return ref_model
 
 
-def compute_simnpo_loss(model, ref_model, input_ids, attention_mask, pixel_values,
+def compute_npo_loss(model, ref_model, input_ids, attention_mask, pixel_values,
                         labels, beta, gamma):
     outputs = model(input_ids=input_ids, attention_mask=attention_mask,
                     pixel_values=pixel_values)
@@ -266,7 +266,7 @@ def main(args):
             ratio_mm = ratio_um = None
             if do_mm:
                 input_ids, attn, pixel, labels = mm
-                loss_mm, ratio_mm = compute_simnpo_loss(
+                loss_mm, ratio_mm = compute_npo_loss(
                     model, ref_model, input_ids, attn, pixel, labels,
                     args.beta, args.gamma)
                 loss_mm = loss_mm.mean()
@@ -275,7 +275,7 @@ def main(args):
                     accountant.after_first_backward()
             if do_um:
                 input_ids_u, attn_u, _, labels_u = um
-                loss_um, ratio_um = compute_simnpo_loss(
+                loss_um, ratio_um = compute_npo_loss(
                     model, ref_model, input_ids_u, attn_u, None, labels_u,
                     args.beta, args.gamma)
                 loss_um = loss_um.mean()
@@ -347,7 +347,7 @@ def main(args):
     if accelerator.is_main_process:
         final_epoch_dir = os.path.join(args.epoch_dir, f"epoch-{epoch + 1}", "model")
         with open(os.path.join(final_epoch_dir, "base_model.json"), "w") as f:
-            json.dump({"base_model": args.vanilla_dir, "method": "simNPO"}, f)
+            json.dump({"base_model": args.vanilla_dir, "method": "NPO"}, f)
         if os.path.lexists(args.save_dir):
             if os.path.islink(args.save_dir):
                 os.unlink(args.save_dir)
@@ -361,7 +361,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="simNPO: Simplified length-normalized NPO unlearning")
+    parser = argparse.ArgumentParser(description="NPO: Simplified length-normalized NPO unlearning")
     parser.add_argument("--model_id", type=str, default=_paths.VANILLA)
     parser.add_argument("--processor_dir", type=str, default=_paths.ORIGIN)
     parser.add_argument("--vanilla_dir", type=str, default=_paths.ORIGIN,
@@ -391,7 +391,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    run_dir = args.run_dir or os.path.join("results", "simNPO", timestamp)
+    run_dir = args.run_dir or os.path.join("results", "NPO", timestamp)
     config_dir = os.path.join(run_dir, "config")
     runs_dir = os.path.join(run_dir, "runs")
     save_dir = os.path.join(run_dir, "model")

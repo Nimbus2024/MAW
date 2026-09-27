@@ -11,7 +11,7 @@ UM 长问长 bio——仍视为同一人物身份知识、保留成对。评测�
 为测试专用, 不参与训练；biography 官方训练亦不使用。
 
 内容形态：
-  plain: {mm:{image,question,answer}, um:{question,answer}}   (GA/KLmin/simNPO/retrain)
+  plain: {mm:{image,question,answer}, um:{question,answer}}   (GA/KLmin/NPO/retrain)
   dpo  : 额外每题共用同一 idk: mm/um 各带 answer_plus(forget) 与 answer_0(idk)
 """
 import ast

@@ -3,14 +3,14 @@
 #
 # 布局: results/<LABEL>/<timestamp>/{logs/{stdout.log,tensorboard/},
 #                                  config/args.json,
-#                                  model/                (最终, GA/KLmin/MAW/simNPO/simPO)
-#                                  runs/<epoch>/{model/,metrics/}   (逐 epoch: MAW/simNPO/simPO)}
+#                                  model/                (最终, GA/KLmin/MAW/NPO/simPO)
+#                                  runs/<epoch>/{model/,metrics/}   (逐 epoch: MAW/NPO/simPO)}
 #
 # 用法(在 code/ 内、已激活实验 conda 环境, 建议 tmux 运行):
 #   ./scripts/run_unlearn.sh GA       --num_epochs 3     # 仅训练
 #   ./scripts/run_unlearn.sh KLmin    --eval             # 训练 + 最终评估
 #   ./scripts/run_unlearn.sh MAW      --eval             # 训练 + 逐 epoch 评估
-#   ./scripts/run_unlearn.sh simNPO   --eval             # simNPO 逐 epoch
+#   ./scripts/run_unlearn.sh NPO   --eval             # NPO 逐 epoch
 #   ./scripts/run_unlearn.sh simPO    --eval             # simPO 逐 epoch
 #   MAW_NPROC=4 ./scripts/run_unlearn.sh MAW --eval
 #   DATA_SPLIT_DIR=... MODEL_DIR=... ./scripts/run_unlearn.sh GA --eval
@@ -24,7 +24,7 @@ set -euo pipefail
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
 METHOD="${1:-}"
-[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW|simNPO|simPO> [--eval] [args...]" >&2; exit 1; }
+[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW|NPO|simPO> [--eval] [args...]" >&2; exit 1; }
 shift
 
 DO_EVAL=0
@@ -36,12 +36,12 @@ for arg in "$@"; do
   esac
 done
 
-# label↔模块: GA↔GA, KLmin↔KL, MAW/simNPO/simPO↔同名模块
+# label↔模块: GA↔GA, KLmin↔KL, MAW/NPO/simPO↔同名模块
 case "${METHOD}" in
   GA)    MODULE="GA"; PER_EPOCH=0 ;;
   KLmin) MODULE="KL"; PER_EPOCH=0 ;;
-  MAW|simNPO|simPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
-  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|simNPO|simPO)" >&2; exit 1 ;;
+  MAW|NPO|simPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
+  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|NPO|simPO)" >&2; exit 1 ;;
 esac
 LABEL="${METHOD}"
 
@@ -110,9 +110,9 @@ echo "== 训练: exp.unlearn.${MODULE} =="
       --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
       "${TRAIN_ARGS[@]}"
   else
-    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); simNPO/simPO/MAW(single) 有
+    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); NPO/simPO/MAW(single) 有
     extra=()
-    case "${MODULE}" in simNPO|simPO|MAW) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
+    case "${MODULE}" in NPO|simPO|MAW) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
     "${PYTHON}" -m "exp.unlearn.${MODULE}" \
       --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
       --data_split_dir "${DATA_SPLIT_DIR}" \

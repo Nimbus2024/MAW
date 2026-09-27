@@ -50,8 +50,8 @@ fi
 
 if [ "${SKIP_E2:-0}" != "1" ]; then
   echo "== [E2] adapter geometry (mm vs um) =="
-  MM_ADAPTER="$(ls -d "${RESULTS_ROOT}"/simNPO/*-mm/model 2>/dev/null | tail -1 || true)"
-  UM_ADAPTER="$(ls -d "${RESULTS_ROOT}"/simNPO/*-um/model 2>/dev/null | tail -1 || true)"
+  MM_ADAPTER="$(ls -d "${RESULTS_ROOT}"/NPO/*-mm/model 2>/dev/null | tail -1 || true)"
+  UM_ADAPTER="$(ls -d "${RESULTS_ROOT}"/NPO/*-um/model 2>/dev/null | tail -1 || true)"
   if [ -n "${MM_ADAPTER}" ] && [ -n "${UM_ADAPTER}" ]; then
     (cd "${CODE_ROOT}" && "${PYTHON}" -m exp.diagnosis.adapter_geometry \
       --adapter_a "${MM_ADAPTER}" --adapter_b "${UM_ADAPTER}" \
