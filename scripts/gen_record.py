@@ -339,6 +339,7 @@ def label_section(label, entries):
 
 GROUPS = ("Forget", "Retain", "Real")
 TASKS = ("Fill", "Classif", "Gen")
+REF_LABELS = {"origin", "vanilla"}
 CORE_HYPERPARAMS = ("lr", "beta", "alpha", "gamma", "rho", "lmbda",
                     "num_epochs", "max_steps", "max_length",
                     "batch_size", "global_batch_size", "num_processes",
@@ -361,10 +362,11 @@ def _fmt_val(t, v):
 
 def overview_table(rows, header, ncols, colspec):
     """Overview: 每列用更好方标绿(umugreen)、更差方标红(umured)。
-    Forget 越低越好; Retain/Real 越高越好。"""
+    Forget 越低越好; Retain/Real 越高越好。参考基线(origin/vanilla)不参与最优/最差。"""
     best, worst = {}, {}
     for ci, (g, t, m) in enumerate(colspec):
-        vals = [(r, _cell_value(r, g, t, m)) for r in rows]
+        vals = [(r, _cell_value(r, g, t, m)) for r in rows
+                if r[0] not in REF_LABELS]
         nums = [(r, v) for r, v in vals if v is not None]
         if not nums:
             continue
@@ -374,7 +376,11 @@ def overview_table(rows, header, ncols, colspec):
     lines = ["\\begin{table}[H]", "\\centering", "\\resizebox{\\linewidth}{!}{%",
              "\\begin{tabular}{l" + "c" * ncols + "}", "\\toprule",
              header, "\\midrule"]
+    ref_started = False
     for ri, row in enumerate(rows):
+        if row[0] in REF_LABELS and not ref_started:
+            lines.append("\\midrule")
+            ref_started = True
         cells = [f"\\textbf{{{esc(row[0])}}}"]
         for ci, (g, t, m) in enumerate(colspec):
             v = _cell_value(row, g, t, m)
@@ -444,9 +450,12 @@ def main():
             print(f"pick: {label} -> {hit[0]}")
         else:
             print(f"pick: {label} 未匹配 {ts}@{ep}, 保留默认")
-    # Overview: 每 label 一行(行名=label), 仅收录最新 run 有有效 metrics 的 label
+    # Overview: 每 label 一行; 参考基线(origin/vanilla)置于最后(上分隔线)
     ov_rows = []
-    for label, entry in ov.items():
+    ordered = ([l for l in sorted(ov) if l not in REF_LABELS]
+               + [l for l in sorted(ov) if l in REF_LABELS])
+    for label in ordered:
+        entry = ov[label]
         if label not in labels or parse_final(entry[3]) is None:
             continue
         ov_rows.append((label,) + entry[1:])
