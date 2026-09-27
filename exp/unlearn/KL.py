@@ -312,6 +312,12 @@ def main(args):
         avg_loss = total_loss / (len(dl_forget))
         print(f"Epoch {epoch+1} - Average Loss: {avg_loss:.4f}")
         writer.add_scalar("loss/epoch_avg", avg_loss, epoch)
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process:
+            epoch_dir = os.path.join(run_dir, "runs", f"epoch-{epoch + 1}", "model")
+            os.makedirs(epoch_dir, exist_ok=True)
+            accelerator.unwrap_model(model).save_pretrained(epoch_dir)
+            print(f"Saved LoRA checkpoint: {epoch_dir}")
         if args.max_steps is not None and global_step >= args.max_steps:
             break
 

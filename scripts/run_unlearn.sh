@@ -3,14 +3,15 @@
 #
 # 布局: results/<LABEL>/<timestamp>/{logs/{stdout.log,tensorboard/},
 #                                  config/args.json,
-#                                  model/                (最终, GA/KLmin/MAW/NPO/simPO)
-#                                  runs/<epoch>/{model/,metrics/}   (逐 epoch: MAW/NPO/simPO)}
+#                                  model/                (最终, 全部方法)
+#                                  runs/<epoch>/{model/,metrics/}   (逐 epoch: GA/KLmin/MAW/NPO/simPO)
 #
 # 用法(在 code/ 内、已激活实验 conda 环境, 建议 tmux 运行):
 #   ./scripts/run_unlearn.sh GA       --num_epochs 3     # 仅训练
-#   ./scripts/run_unlearn.sh KLmin    --eval             # 训练 + 最终评估
-#   ./scripts/run_unlearn.sh MAW      --eval             # 训练 + 逐 epoch 评估
-#   ./scripts/run_unlearn.sh NPO   --eval             # NPO 逐 epoch
+#   ./scripts/run_unlearn.sh GA       --eval             # 训练 + 逐 epoch 评估
+#   ./scripts/run_unlearn.sh KLmin    --eval             # KLmin 逐 epoch
+#   ./scripts/run_unlearn.sh MAW      --eval             # MAW 逐 epoch
+#   ./scripts/run_unlearn.sh NPO      --eval             # NPO 逐 epoch
 #   ./scripts/run_unlearn.sh simPO    --eval             # simPO 逐 epoch
 #   MAW_NPROC=4 ./scripts/run_unlearn.sh MAW --eval
 #   DATA_SPLIT_DIR=... MODEL_DIR=... ./scripts/run_unlearn.sh GA --eval
@@ -38,8 +39,8 @@ done
 
 # label↔模块: GA↔GA, KLmin↔KL, MAW/NPO/simPO↔同名模块
 case "${METHOD}" in
-  GA)    MODULE="GA"; PER_EPOCH=0 ;;
-  KLmin) MODULE="KL"; PER_EPOCH=0 ;;
+  GA)    MODULE="GA"; PER_EPOCH=1 ;;
+  KLmin) MODULE="KL"; PER_EPOCH=1 ;;
   MAW|NPO|simPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
   *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|NPO|simPO)" >&2; exit 1 ;;
 esac
