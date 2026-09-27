@@ -97,7 +97,7 @@ def compute_dpo_loss(model, ref_model, batch_w, batch_l, beta):
         r_idk_ref = _sequence_logprob(ref_w.logits, batch_w["labels"], normalize=True)
         r_forget_ref = _sequence_logprob(ref_l.logits, batch_l["labels"], normalize=True)
     margin = beta * ((r_idk - r_forget) - (r_idk_ref - r_forget_ref))
-    return -F.logsigmoid(margin), margin.detach().mean()
+    return -F.logsigmoid(margin)
 
 
 def main(args):
