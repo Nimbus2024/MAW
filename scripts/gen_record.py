@@ -139,16 +139,42 @@ def collect_runs(label_dir):
     return entries
 
 
+def _has_full_metrics(data):
+    if not isinstance(data, dict):
+        return False
+    for group in GROUP_KEYS:
+        scope = next((data[k] for k in GROUP_KEYS[group] if isinstance(data.get(k), dict)), None)
+        if scope is None:
+            return False
+        for task in TASK_KEYS:
+            t = scope.get(TASK_KEYS[task])
+            if not isinstance(t, dict):
+                return False
+        fill_cls = (scope[TASK_KEYS["Fill"]], scope[TASK_KEYS["Classif"]])
+        if any("All Modal Question Accuracy" not in t or
+               "All Modal Question Error" not in t for t in fill_cls):
+            return False
+        if "All Modal Average ROUGE-L" not in scope[TASK_KEYS["Gen"]]:
+            return False
+    return True
+
+
+def _is_full(mdir):
+    return _has_full_metrics(parse_final(mdir))
+
+
 def build_overview(results_root):
-    """最新 ts(及最新 epoch) 每 label 一行。返回 label -> run_entry。"""
+    """每 label 一行: 优先取最近一个指标完整的 run; 无则退回最近 run。"""
     rows = {}
     for label in sorted(os.listdir(results_root)):
         ld = os.path.join(results_root, label)
         if not os.path.isdir(ld):
             continue
         runs = collect_runs(ld)
+        full = [e for e in runs if _is_full(e[3])]
+        with_metrics = [e for e in runs if parse_final(e[3]) is not None]
         if runs:
-            rows[label] = runs[-1]
+            rows[label] = (full or with_metrics or runs)[-1]
     return rows
 
 
@@ -248,8 +274,9 @@ def metric_table(run_rows, header, colspec):
             ep = _epoch_of(run) or ""
             cells = []
             for ci, (g, t, m) in enumerate(colspec):
-                s = _fmt_val(t, _cell_value(run, g, t, m))
-                if s:
+                v = _cell_value(run, g, t, m)
+                s = "—" if v is None else _fmt_val(t, v)
+                if v is not None:
                     if best.get(ci) is run:
                         s = f"\\textcolor{{umugreen}}{{{s}}}"
                     elif worst.get(ci) is run:
@@ -352,8 +379,8 @@ def overview_table(rows, header, ncols, colspec):
         cells = [f"\\textbf{{{esc(row[0])}}}"]
         for ci, (g, t, m) in enumerate(colspec):
             v = _cell_value(row, g, t, m)
-            s = _fmt_val(t, v)
-            if s:
+            s = "—" if v is None else _fmt_val(t, v)
+            if v is not None:
                 if best.get(ci) is row:
                     s = f"\\textcolor{{umugreen}}{{{s}}}"
                 elif worst.get(ci) is row:
@@ -372,6 +399,8 @@ def main():
     ap.add_argument("--pick", default="",
                     help="Overview 每 label 选定的代表 run, 逗号分隔 label=ts[@epoch]; "
                          "如 MAW=20260907_154223@8")
+    ap.add_argument("--include-partial", action="store_true",
+                    help="详情表保留指标不完整(旧 schema, 无 All 键)的 run")
     args = ap.parse_args()
 
     results_root = os.path.join(args.root, "results")
@@ -437,6 +466,11 @@ def main():
     doc.append("")
     for label in labels:
         entries = collect_runs(os.path.join(results_root, label))
+        entries = [e for e in entries if parse_final(e[3]) is not None]
+        if not args.include_partial:
+            full = [e for e in entries if _is_full(e[3])]
+            if full:
+                entries = full
         if not entries:
             continue
         doc.append(label_section(label, entries))
