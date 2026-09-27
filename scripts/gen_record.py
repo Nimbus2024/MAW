@@ -172,9 +172,8 @@ def build_overview(results_root):
             continue
         runs = collect_runs(ld)
         full = [e for e in runs if _is_full(e[3])]
-        with_metrics = [e for e in runs if parse_final(e[3]) is not None]
-        if runs:
-            rows[label] = (full or with_metrics or runs)[-1]
+        if full:
+            rows[label] = full[-1]
     return rows
 
 
@@ -407,7 +406,8 @@ def main():
     record_dir = os.path.join(args.root, "record")
     labels = [l for l in (x.strip() for x in args.labels.split(",")) if l] or \
         sorted(os.listdir(results_root))
-    labels = [l for l in labels if os.path.isdir(os.path.join(results_root, l))]
+    labels = [l for l in labels if not l.startswith(("_", "."))
+              and os.path.isdir(os.path.join(results_root, l))]
 
     doc = [
         "\\documentclass{article}",
@@ -464,16 +464,23 @@ def main():
     doc.append("\\noindent\\small\\emph{Per-modal columns: IT = image-textual; PT = pure-text; "
                "green = best value, red = worst value per column.}")
     doc.append("")
+    skipped_labels = []
     for label in labels:
         entries = collect_runs(os.path.join(results_root, label))
         entries = [e for e in entries if parse_final(e[3]) is not None]
+        full = [e for e in entries if _is_full(e[3])]
         if not args.include_partial:
-            full = [e for e in entries if _is_full(e[3])]
-            if full:
-                entries = full
+            if not full:
+                skipped_labels.append(label)
+                continue
+            entries = full
         if not entries:
             continue
         doc.append(label_section(label, entries))
+    if skipped_labels:
+        doc.append("")
+        doc.append("\\noindent\\small\\emph{未纳入(现有 run 指标不完整/旧评估 schema): "
+                   + ", ".join(esc(s) for s in skipped_labels) + ".}")
     doc.append("\\end{document}")
 
     os.makedirs(record_dir, exist_ok=True)
