@@ -399,6 +399,8 @@ def overview_table(rows, header, ncols, colspec):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="../product")
+    ap.add_argument("--ratio", type=int, default=5,
+                    help="forget split ratio (results/ratioN -> record/ratioN)")
     ap.add_argument("--out", default="UMU-Bench_实验记录.tex")
     ap.add_argument("--labels", default="", help="逗号分隔; 空=全部")
     ap.add_argument("--pick", default="",
@@ -408,8 +410,8 @@ def main():
                     help="详情表保留指标不完整(旧 schema, 无 All 键)的 run")
     args = ap.parse_args()
 
-    results_root = os.path.join(args.root, "results")
-    record_dir = os.path.join(args.root, "record")
+    results_root = os.path.join(args.root, "results", f"ratio{args.ratio}")
+    record_dir = os.path.join(args.root, "record", f"ratio{args.ratio}")
     labels = [l for l in (x.strip() for x in args.labels.split(",")) if l] or \
         sorted(os.listdir(results_root))
     labels = [l for l in labels if not l.startswith(("_", "."))

@@ -71,7 +71,7 @@ cd code
 ./scripts/run_eval.sh origin --pretrain --model_id <本地模型目录>   # 评估独立模型
 ```
 
-产物规范（`results/<label>/<timestamp>/`）：`logs/{stdout.log,tensorboard/}`、
+产物规范（`results/ratio<N>/<label>/<timestamp>/`）：`logs/{stdout.log,tensorboard/}`、
 `config/args.json`、`model/`（最终）；逐 epoch 方法（MAW/NPO/simPO）
 存 `runs/<epoch>/{model,metrics}`。
 
