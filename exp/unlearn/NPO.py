@@ -3,7 +3,7 @@
 
 损失(在 forget 多模态 ∪ 单模态上, 每样本):
     r(x, y) = (1/|y|) * Σ_t [log π_θ(y_t|x,y_<t) - log π_ref(y_t|x,y_<t)]
-    L = -E_{(x,y)}[ 2 * log σ( -β·r(x,y) - γ ) ]
+    L = -E_{(x,y)}[ (2/β) * log σ( -β·r(x,y) - γ ) ]
 
 policy = origin(SFT/llava_smu_ft) + LoRA; ref = 冻结的 origin。单模态项乘 alpha。
 逐 epoch 保存到 <run>/runs/<epoch>/model, 最终 <run>/model 为末 epoch 软链。
@@ -89,7 +89,7 @@ def compute_npo_loss(model, ref_model, input_ids, attention_mask, pixel_values,
                                 pixel_values=pixel_values)
         lp_ref = _sequence_logprob(ref_outputs.logits, labels, normalize=True)
     ratio = lp - lp_ref
-    return -2.0 * F.logsigmoid(-beta * ratio - gamma), ratio.detach().mean()
+    return -(2.0 / beta) * F.logsigmoid(-beta * ratio - gamma), ratio.detach().mean()
 
 
 def _param_group(name):

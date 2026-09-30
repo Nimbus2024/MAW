@@ -67,7 +67,7 @@ DATA_SPLIT_DIR="${DATA_SPLIT_DIR:-${CODE_ROOT}/../dependencies/data/UMU-bench}"
 VANILLA_DIR="${VANILLA_DIR:-${MODEL_DIR}/llava-1.5-7b-hf}"
 ORIGIN_DIR="${ORIGIN_DIR:-${MODEL_DIR}/llava_smu_ft}"
 
-TS="$(date +%Y%m%d_%H%M%S)"
+TS="$(date +%Y%m%d_%H%M%S)${RUN_SUFFIX:-}"
 RUN_DIR="${RESULTS_ROOT}/${LABEL}/${TS}"
 mkdir -p "${RUN_DIR}/logs/tensorboard" "${RUN_DIR}/config"
 exec > >(tee "${RUN_DIR}/logs/stdout.log") 2>&1

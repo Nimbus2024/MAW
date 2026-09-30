@@ -127,7 +127,7 @@ def _sequence_logprob(logits, labels, normalize=False):
     return sequence_log_probs
 
 
-def compute_forget_dpo_loss(model, ref_model, batch_w, batch_l, beta=0.4):
+def compute_forget_dpo_loss(model, ref_model, batch_w, batch_l, beta=0.4, coeff="inv_beta"):
     """
     [可移植] Forget Loss L(x) — 默认 DPO。
     DPO: 偏好 y_w (idk 拒绝回答) 优于 y_l (正确答案)。
@@ -177,7 +177,9 @@ def compute_forget_dpo_loss(model, ref_model, batch_w, batch_l, beta=0.4):
     margin = r_w - r_l
     # 除以 beta: 使梯度不含 beta 系数(d/dθ[-(1/β)logσ(β·m)] = -(1-σ)·m'),
     # 避免 beta 与 lr 联合放大/缩小更新步长。
-    dpo_loss = -F.logsigmoid(beta * margin).mean() / beta
+    dpo_loss = -F.logsigmoid(beta * margin).mean()
+    if coeff == "inv_beta":
+        dpo_loss = dpo_loss / beta
     return dpo_loss, margin.detach().mean()
 
 
@@ -462,9 +464,11 @@ def main(args):
 
             # ── DPO forget losses + margins ──
             loss_mul, M_mul = compute_forget_dpo_loss(
-                model, ref_model, batch_mm["batch_w"], batch_mm["batch_l"], beta=args.beta)
+                model, ref_model, batch_mm["batch_w"], batch_mm["batch_l"],
+                beta=args.beta, coeff=args.coeff)
             loss_uni, M_uni = compute_forget_dpo_loss(
-                model, ref_model, batch_um["batch_w"], batch_um["batch_l"], beta=args.beta)
+                model, ref_model, batch_um["batch_w"], batch_um["batch_l"],
+                beta=args.beta, coeff=args.coeff)
 
             # ── Dynamic gamma = sigmoid(gap − gap_ema) ──
             # M0 = gap 的 EMA(ρ)；γ∈(0,1)。Margins detached, block under no_grad,
@@ -625,6 +629,8 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=float, default=1.0,
                         help="scale coefficient for (M-M0) inside sigmoid")
     # Retain
+    parser.add_argument("--coeff", choices=("inv_beta", "one"), default="inv_beta",
+                        help="DPO forget loss coefficient: /beta or 1")
     parser.add_argument("--lmbda", type=float, default=0.0,
                         help="Retain KL weight (v1: 0.0, v2: >0.0)")
     args = parser.parse_args()
