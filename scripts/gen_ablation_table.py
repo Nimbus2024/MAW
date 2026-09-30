@@ -10,9 +10,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_record as G
 
-CFG_COLS = (("lr", "lr"), ("beta", "β"), ("alpha", "α"), ("rho", "ρ"),
-            ("gamma_mode", "γmode"), ("gamma_fixed", "γfix"),
-            ("coeff", "coeff"), ("max_steps", "max_steps"))
+CFG_COLS = (("label", "method"), ("lr", "lr"), ("beta", "$\\beta$"), ("alpha", "$\\alpha$"),
+            ("rho", "$\\rho$"), ("gamma_mode", "$\\gamma$mode"),
+            ("gamma_fixed", "$\\gamma$fix"), ("coeff", "coeff"),
+            ("max_steps", "max steps"))
 
 
 def read_cfg(run):
@@ -31,7 +32,7 @@ def steps_per_epoch(run, cfg):
     if os.path.isfile(log):
         with open(log, encoding="utf-8", errors="ignore") as f:
             for line in f:
-                m = re.search(r"Forget DPO pairs:\s*(\d+)", line)
+                m = re.search(r"Forget(?: DPO)? pairs:\s*(\d+)", line)
                 if m:
                     n = int(m.group(1))
                     break
@@ -61,21 +62,26 @@ def latest_metrics(run):
 
 
 def run_tag(run):
-    return os.path.basename(run)
+    m = re.fullmatch(r"\d{8}_\d{6}-(.+)", os.path.basename(run))
+    return m.group(1) if m else os.path.basename(run)
 
 
 def collect(results_root, epoch=None):
     rows = []
-    for run in sorted(glob.glob(os.path.join(results_root, "*"))):
-        if not os.path.isdir(run):
-            continue
-        if not re.fullmatch(r"\d{8}_\d{6}(-[A-Za-z0-9._]+)?", os.path.basename(run)):
-            continue
-        cfg = read_cfg(run)
-        data = latest_metrics(run)
-        if data is None:
-            continue
-        rows.append((run_tag(run), cfg, data, actual_steps(run, cfg)))
+    labels = [d for d in sorted(os.listdir(results_root))
+              if os.path.isdir(os.path.join(results_root, d))]
+    for label in labels:
+        for run in sorted(glob.glob(os.path.join(results_root, label, "*"))):
+            if not os.path.isdir(run):
+                continue
+            if not re.fullmatch(r"\d{8}_\d{6}(-[A-Za-z0-9._]+)?", os.path.basename(run)):
+                continue
+            cfg = read_cfg(run)
+            cfg["label"] = label
+            data = latest_metrics(run)
+            if data is None:
+                continue
+            rows.append((run_tag(run), cfg, data, actual_steps(run, cfg)))
     return rows
 
 
@@ -133,7 +139,7 @@ def build_doc(rows, epoch_note):
         "\\maketitle",
         "\\noindent\\small\\emph{%s}" % G.esc(epoch_note),
         "",
-        "{\\footnotesize\\setlength{\\tabcolsep}{3pt}",
+        "{\\scriptsize\\setlength{\\tabcolsep}{2pt}",
         "\\begin{longtable}{l" + "c" * (len(CFG_COLS) + 1 + 9) + "}",
         "\\toprule",
         head,
@@ -145,7 +151,7 @@ def build_doc(rows, epoch_note):
         "\\endhead",
     ]
     for tag, cfg, data, steps in rows:
-        cells = [tag]
+        cells = [G.esc(tag)]
         for key, _ in CFG_COLS:
             v = cfg.get(key)
             cells.append("" if v is None else G.esc(v))
@@ -167,7 +173,7 @@ def build_doc(rows, epoch_note):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="../product")
-    ap.add_argument("--sub", default="ablation/MAW")
+    ap.add_argument("--sub", default="ablation")
     ap.add_argument("--out", default="ablations/MAW_ablation.tex")
     ap.add_argument("--note", default="metrics from last checkpoint of each run")
     args = ap.parse_args()
