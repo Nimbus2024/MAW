@@ -18,25 +18,28 @@ F_TICK = ImageFont.truetype(FONT_PATH, 16)
 F_LEG = ImageFont.truetype(FONT_PATH, 19)
 
 EN_TITLES = {
-    "F1_dynamic_gamma": "F1  dynamic gamma / EMA / coefficient (vs DPO)",
-    "F2_modality": "F2  modality isolation (IT-only / PT-only / both)",
-    "F3_alpha": "F3  gamma sharpness alpha",
-    "F4_rho": "F4  EMA rho (rho=1 == sigmoid_gap)",
-    "F5_beta": "F5  beta",
-    "F6_calibration": "F6  budget calibration (lr x steps)",
+    "G1_dynamic_vs_static": "G1  dynamic gamma vs static gamma=0.5",
+    "G2_ema_rho": "G2  EMA smoothing rho (0.5 / 0.8 / 0.9 / 1 = no EMA)",
+    "G3_beta": "G3  beta (0.1 -> 0.8)",
+    "G4_alpha": "G4  alpha (0.5 -> 3)",
+    "G5_coeff": "G5  coefficient: inv_beta vs one (DPO)",
+    "A0_budget": "A0  budget calibration (lr x steps)",
 }
 PANELS = [
     ("Forget Classif (All)  lower = more forgotten",
      lambda d: P.series_metric(d, "Forget", "Classif")),
     ("Retain Fill (All)  higher = better kept",
      lambda d: P.series_metric(d, "Retain", "Fill")),
-    ("Real Fill (All)  higher = better",
-     lambda d: P.series_metric(d, "Real", "Fill")),
-    ("Modal imbalance |Forget Cls IT - PT|",
-     lambda d: (abs(P.series_metric(d, "Forget", "Classif", "IT")
-                    - P.series_metric(d, "Forget", "Classif", "PT"))
-                if P.series_metric(d, "Forget", "Classif", "IT") is not None
-                and P.series_metric(d, "Forget", "Classif", "PT") is not None else None)),
+    ("Forget Cls IT - PT  (positive = IT less forgotten)",
+     lambda d: (P.series_metric(d, "Forget", "Classif", "IT")
+                - P.series_metric(d, "Forget", "Classif", "PT"))
+               if P.series_metric(d, "Forget", "Classif", "IT") is not None
+               and P.series_metric(d, "Forget", "Classif", "PT") is not None else None),
+    ("Retain Fill IT - PT  (positive = IT better kept)",
+     lambda d: (P.series_metric(d, "Retain", "Fill", "IT")
+                - P.series_metric(d, "Retain", "Fill", "PT"))
+               if P.series_metric(d, "Retain", "Fill", "IT") is not None
+               and P.series_metric(d, "Retain", "Fill", "PT") is not None else None),
 ]
 
 

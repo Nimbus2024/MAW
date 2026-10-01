@@ -14,18 +14,20 @@ COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
           "#8c564b", "#17becf", "#e377c2", "#7f7f7f", "#bcbd22"]
 
 FAMILIES = {
-    "F1_dynamic_gamma": ("动态 γ / EMA / 系数（对照 DPO）",
-                          ["v1ema", "v3fix05", "v2gap", "v9coeff1", "v10dpo"]),
-    "F2_modality": ("模态隔离（IT-only vs PT-only vs both）",
-                    ["v1ema", "v4it", "v5pt"]),
-    "F3_alpha": ("γ 锐度 α 扫描", ["v1ema", "v6a05", "v6a15", "v6a3"]),
-    "F4_rho": ("EMA 平滑 ρ 扫描（含 ρ=1 极限 sigmoid_gap）",
-               ["v7r05", "v1ema", "v7r09", "v2gap"]),
-    "F5_beta": ("β 扫描", ["v1ema", "v8b02", "v8b04", "v8b08"]),
-    "F6_calibration": ("预算校准（lr × steps）",
-                       ["cal_lr5em6_s50", "cal_lr5em6_s95", "cal_lr75em6_s75",
-                        "cal_lr75em6_s95", "cal_lr1em5_s50", "cal_lr1em5_s95",
-                        "cal_lr25em6_s150", "cal_lr25em6_s200"]),
+    "G1_dynamic_vs_static": ("动态 γ vs 静态 γ=0.5（DPO/beta 设定）",
+                             ["v1ema", "v3fix05"]),
+    "G2_ema_rho": ("动态 γ 的 EMA 平滑程度 ρ（0.5 / 0.8 / 0.9 / 1=无 EMA）",
+                   ["v7r05", "v1ema", "v7r09", "v2gap"]),
+    "G3_beta": ("β 从小到大",
+                ["v1ema", "v8b02", "v8b04", "v8b08"]),
+    "G4_alpha": ("α 从小到大",
+                 ["v6a05", "v1ema", "v6a15", "v6a3"]),
+    "G5_coeff": ("DPO 是否除以 β（系数 inv_beta vs one）",
+                 ["v3fix05", "v9coeff1", "v1ema", "v10dpo"]),
+    "A0_budget": ("附录：预算校准（lr × steps）",
+                  ["cal_lr5em6_s50", "cal_lr5em6_s95", "cal_lr75em6_s75",
+                   "cal_lr75em6_s95", "cal_lr1em5_s50", "cal_lr1em5_s95",
+                   "cal_lr25em6_s150", "cal_lr25em6_s200"]),
 }
 
 
@@ -101,13 +103,16 @@ def legend(entries, x, y):
 
 def build_family_svg(name, title, tags, runs, outdir):
     series_specs = [
-        ("Forget Classif (All, 越低越忘)", lambda d: series_metric(d, "Forget", "Classif")),
-        ("Retain Fill (All, 越高越保)", lambda d: series_metric(d, "Retain", "Fill")),
-        ("Real Fill (All, 越高越好)", lambda d: series_metric(d, "Real", "Fill")),
-        ("|Forget Cls IT-PT| 模态失衡", lambda d: (
-            abs(series_metric(d, "Forget", "Classif", "IT") - series_metric(d, "Forget", "Classif", "PT"))
+        ("Forget Classif (All)", lambda d: series_metric(d, "Forget", "Classif")),
+        ("Retain Fill (All)", lambda d: series_metric(d, "Retain", "Fill")),
+        ("Forget Cls IT - PT", lambda d: (
+            series_metric(d, "Forget", "Classif", "IT") - series_metric(d, "Forget", "Classif", "PT")
             if series_metric(d, "Forget", "Classif", "IT") is not None
             and series_metric(d, "Forget", "Classif", "PT") is not None else None)),
+        ("Retain Fill IT - PT", lambda d: (
+            series_metric(d, "Retain", "Fill", "IT") - series_metric(d, "Retain", "Fill", "PT")
+            if series_metric(d, "Retain", "Fill", "IT") is not None
+            and series_metric(d, "Retain", "Fill", "PT") is not None else None)),
     ]
     W, H = 1000, 900
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}">',
