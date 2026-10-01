@@ -477,6 +477,7 @@ def main(args):
                 M_mul = accelerator.reduce(M_mul, reduction="mean")
                 M_uni = accelerator.reduce(M_uni, reduction="mean")
                 gap = float(M_mul - M_uni)
+                gap_ema_prev = gap_ema
                 if args.gamma_mode == "sigmoid_ema":
                     gamma = 1.0 / (1.0 + math.exp(-(args.alpha * (gap - gap_ema))))
                 elif args.gamma_mode == "sigmoid_gap":
@@ -528,6 +529,8 @@ def main(args):
             if writer is not None:
                 writer.add_scalar("Loss/train", step_total, global_step)
                 writer.add_scalar("gamma", gamma, global_step)
+                writer.add_scalar("controller/s", gap - gap_ema_prev, global_step)
+                writer.add_scalar("controller/alpha_s", args.alpha * (gap - gap_ema_prev), global_step)
                 writer.add_scalar("M/gap_ema", gap_ema.item() if hasattr(gap_ema, 'item') else gap_ema, global_step)
                 writer.add_scalar("M/multimodal_margin", M_mul.item() if hasattr(M_mul, 'item') else M_mul, global_step)
                 writer.add_scalar("M/unimodal_margin", M_uni.item() if hasattr(M_uni, 'item') else M_uni, global_step)
