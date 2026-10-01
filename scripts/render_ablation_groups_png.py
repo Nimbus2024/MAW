@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
@@ -8,29 +9,60 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import plot_ablation_groups as P
 
-FONT = ImageFont.load_default()
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+BOLD_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+F_TITLE = ImageFont.truetype(BOLD_PATH, 30)
+F_PANEL = ImageFont.truetype(BOLD_PATH, 22)
+F_AXIS = ImageFont.truetype(FONT_PATH, 17)
+F_TICK = ImageFont.truetype(FONT_PATH, 16)
+F_LEG = ImageFont.truetype(FONT_PATH, 19)
+
+EN_TITLES = {
+    "F1_dynamic_gamma": "F1  dynamic gamma / EMA / coefficient (vs DPO)",
+    "F2_modality": "F2  modality isolation (IT-only / PT-only / both)",
+    "F3_alpha": "F3  gamma sharpness alpha",
+    "F4_rho": "F4  EMA rho (rho=1 == sigmoid_gap)",
+    "F5_beta": "F5  beta",
+    "F6_calibration": "F6  budget calibration (lr x steps)",
+}
+PANELS = [
+    ("Forget Classif (All)  lower = more forgotten",
+     lambda d: P.series_metric(d, "Forget", "Classif")),
+    ("Retain Fill (All)  higher = better kept",
+     lambda d: P.series_metric(d, "Retain", "Fill")),
+    ("Real Fill (All)  higher = better",
+     lambda d: P.series_metric(d, "Real", "Fill")),
+    ("Modal imbalance |Forget Cls IT - PT|",
+     lambda d: (abs(P.series_metric(d, "Forget", "Classif", "IT")
+                    - P.series_metric(d, "Forget", "Classif", "PT"))
+                if P.series_metric(d, "Forget", "Classif", "IT") is not None
+                and P.series_metric(d, "Forget", "Classif", "PT") is not None else None)),
+]
 
 
 def draw_panel(draw, x0, y0, w, h, title, series, color_of):
-    draw.rectangle([x0, y0, x0 + w, y0 + h], fill=(252, 252, 252), outline=(150, 150, 150))
+    draw.rectangle([x0, y0, x0 + w, y0 + h], fill=(255, 255, 255), outline=(120, 120, 120), width=2)
+    draw.text((x0, y0 - 30), title, fill=(0, 0, 0), font=F_PANEL)
     vals = [v for _, ys in series for v in ys if v is not None]
     if not vals:
         return
     vmin, vmax = min(vals), max(vals)
-    pad = (vmax - vmin) * 0.12 or 1.0
+    pad = (vmax - vmin) * 0.15 or 1.0
     vmin -= pad
     vmax += pad
     n = max((len(ys) for _, ys in series), default=1)
-    draw.text((x0 + 4, y0 - 14), title, fill=(0, 0, 0), font=FONT)
-    draw.text((x0 + 4, y0 + 2), f"max={max(vals):.2f}", fill=(120, 120, 120), font=FONT)
-    draw.text((x0 + 4, y0 + h - 12), f"min={min(vals):.2f}", fill=(120, 120, 120), font=FONT)
-    if vmin < 0 < vmax:
-        yz = y0 + h - h * (0 - vmin) / (vmax - vmin)
-        draw.line([x0, yz, x0 + w, yz], fill=(220, 220, 220))
-    for i in range(1, 4):
-        xx = x0 + w * i / 4
-        draw.line([xx, y0, xx, y0 + h], fill=(238, 238, 238))
+    for k in range(5):
+        yv = vmin + (vmax - vmin) * k / 4
+        yy = y0 + h - h * k / 4
+        draw.line([x0, yy, x0 + w, yy], fill=(235, 235, 235))
+        draw.text((x0 - 78, yy - 10), f"{yv:.2f}", fill=(90, 90, 90), font=F_TICK)
+    for i in range(n):
+        xx = x0 + w * i / max(n - 1, 1)
+        draw.line([xx, y0, xx, y0 + h], fill=(245, 245, 245))
+        draw.text((xx - 5, y0 + h + 8), str(i + 1), fill=(90, 90, 90), font=F_TICK)
+    draw.text((x0 + w / 2 - 22, y0 + h + 30), "epoch", fill=(60, 60, 60), font=F_AXIS)
     for tag, ys in series:
+        col = color_of(tag)
         pts = []
         for i, v in enumerate(ys):
             if v is None:
@@ -39,92 +71,81 @@ def draw_panel(draw, x0, y0, w, h, title, series, color_of):
             yy = y0 + h - h * (v - vmin) / (vmax - vmin)
             pts.append((xx, yy))
         if len(pts) >= 2:
-            draw.line(pts, fill=color_of(tag), width=2)
+            draw.line(pts, fill=col, width=4)
         for pt in pts:
-            draw.ellipse([pt[0] - 2, pt[1] - 2, pt[0] + 2, pt[1] + 2], fill=color_of(tag))
-    for i in range(n):
-        xx = x0 + w * i / max(n - 1, 1)
-        draw.text((xx - 3, y0 + h + 4), str(i + 1), fill=(80, 80, 80), font=FONT)
-    draw.text((x0 + w - 44, y0 + h + 4), "epoch", fill=(80, 80, 80), font=FONT)
+            draw.ellipse([pt[0] - 5, pt[1] - 5, pt[0] + 5, pt[1] + 5], fill=col, outline=(255, 255, 255))
+        if pts:
+            lx, ly = pts[-1]
+            draw.text((lx + 8, ly - 10), f"{ys[-1]:.1f}", fill=col, font=F_TICK)
 
 
 def render_family(name, title, tags, runs, outdir):
     color_of = lambda tag: P.COLORS[tags.index(tag) % len(P.COLORS)]
-    specs = [
-        ("Forget Classif (All, lower=forgotten)", lambda d: P.series_metric(d, "Forget", "Classif")),
-        ("Retain Fill (All, higher=kept)", lambda d: P.series_metric(d, "Retain", "Fill")),
-        ("Real Fill (All, higher=better)", lambda d: P.series_metric(d, "Real", "Fill")),
-        ("|Forget Cls IT - PT| (modal imbalance)", lambda d: (
-            abs(P.series_metric(d, "Forget", "Classif", "IT") - P.series_metric(d, "Forget", "Classif", "PT"))
-            if P.series_metric(d, "Forget", "Classif", "IT") is not None
-            and P.series_metric(d, "Forget", "Classif", "PT") is not None else None)),
-    ]
-    img = Image.new("RGB", (1320, 1000), (255, 255, 255))
+    present = [t for t in tags if t in runs]
+    img = Image.new("RGB", (1960, 1560), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.text((24, 14), title, fill=(0, 0, 0), font=FONT)
-    for i, tag in enumerate([t for t in tags if t in runs]):
-        yy = 34 + i * 13
-        draw.line([1000, yy + 4, 1020, yy + 4], fill=color_of(tag), width=3)
-        draw.text((1026, yy), tag, fill=(0, 0, 0), font=FONT)
-    positions = [(60, 90), (700, 90), (60, 560), (700, 560)]
-    for (label, fn), (x0, y0) in zip(specs, positions):
+    draw.text((30, 22), EN_TITLES.get(name, title), fill=(0, 0, 0), font=F_TITLE)
+    lx, ly = 30, 78
+    for tag in present:
+        draw.line([lx, ly + 9, lx + 34, ly + 9], fill=color_of(tag), width=5)
+        draw.text((lx + 42, ly), tag, fill=(0, 0, 0), font=F_LEG)
+        lx += 60 + int(draw.textlength(tag, font=F_LEG))
+        if lx > 1500:
+            lx, ly = 30, ly + 34
+    y_base = ly + 50
+    positions = [(110, y_base), (1010, y_base), (110, y_base + 660), (1010, y_base + 660)]
+    for (label, fn), (x0, y0) in zip(PANELS, positions):
         series = []
-        for tag in tags:
-            if tag not in runs:
-                continue
+        for tag in present:
             eps = runs[tag]["epochs"]
             ys = [fn(eps[e]) if e in eps else None for e in sorted(eps)]
             if any(v is not None for v in ys):
                 series.append((tag, ys))
-        draw_panel(draw, x0, y0, 560, 400, label, series, color_of)
+        draw_panel(draw, x0, y0, 820, 500, label, series, color_of)
     path = os.path.join(outdir, f"{name}.png")
     img.save(path)
     return path
 
 
-def render_controller(tag, runs, outdir):
-    r = runs[tag]
-    import re
-    txt = None
-    for log in P.glob.glob(os.path.join(args_root[0], "*", "*", "logs", "stdout.log")):
-        ts = os.path.basename(os.path.dirname(os.path.dirname(log)))
-        t = ts.split("-", 1)[1] if "-" in ts else ts
-        if t == tag:
-            txt = open(log, encoding="utf-8", errors="ignore").read()
-            break
-    if not txt:
-        return None
+def render_controller(tag, logpath, outdir):
+    txt = open(logpath, encoding="utf-8", errors="ignore").read()
     gam = [float(x) for x in re.findall(r"gamma=([0-9.]+)", txt)]
     gap = [float(x) for x in re.findall(r"gap=(-?[0-9.]+)", txt)]
     ge = [float(x) for x in re.findall(r"gap_ema=(-?[0-9.]+)", txt)]
     n = min(len(gam), len(gap), len(ge))
     s = [gap[i] - ge[i] for i in range(n)]
-    img = Image.new("RGB", (1320, 700), (255, 255, 255))
+    img = Image.new("RGB", (1960, 1100), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.text((24, 14), f"{tag}: controller signals", fill=(0, 0, 0), font=FONT)
-    for i, (label, ys, col) in enumerate((("gamma", gam, (31, 119, 180)), ("gap", gap, (214, 39, 40)), ("s=gap-gap_ema", s, (44, 160, 44)))):
-        draw_panel(draw, 60, 80 + i * 210, 1180, 170, label, [(tag, ys[:n])], lambda _t, c=col: c)
+    draw.text((30, 22), f"controller signals - {tag}", fill=(0, 0, 0), font=F_TITLE)
+    specs = [("gamma", gam[:n], (31, 119, 180)), ("gap", gap[:n], (214, 39, 40)),
+             ("s = gap - gap_ema", s, (44, 160, 44))]
+    for i, (label, ys, col) in enumerate(specs):
+        draw_panel(draw, 110, 100 + i * 330, 1760, 250, label, [(tag, ys)], lambda _t, c=col: c)
     path = os.path.join(outdir, f"{tag}_controller.png")
     img.save(path)
     return path
 
 
-args_root = ["../product"]
-
-if __name__ == "__main__":
+def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="../product")
     args = ap.parse_args()
-    args_root[0] = os.path.join(args.root, "results", "ablation")
-    runs = P.load_runs(args_root[0])
+    root = os.path.join(args.root, "results", "ablation")
+    runs = P.load_runs(root)
     gdir = os.path.join(args.root, "record", "ablations", "groups")
-    os.makedirs(gdir, exist_ok=True)
-    for name, (title, tags) in P.FAMILIES.items():
-        path = render_family(name, title, tags, runs, gdir)
-        print("written", path)
     cdir = os.path.join(args.root, "record", "ablations", "curves")
+    os.makedirs(gdir, exist_ok=True)
     os.makedirs(cdir, exist_ok=True)
-    for tag in ("v1ema", "v6a3", "v7r09"):
-        p = render_controller(tag, runs, cdir)
-        if p:
-            print("written", p)
+    for name, (title, tags) in P.FAMILIES.items():
+        print("written", render_family(name, title, tags, runs, gdir))
+    for tag in ("v1ema", "v6a3"):
+        for log in P.glob.glob(os.path.join(root, "*", "*", "logs", "stdout.log")):
+            ts = os.path.basename(os.path.dirname(os.path.dirname(log)))
+            t = ts.split("-", 1)[1] if "-" in ts else ts
+            if t == tag:
+                print("written", render_controller(tag, log, cdir))
+                break
+
+
+if __name__ == "__main__":
+    main()
