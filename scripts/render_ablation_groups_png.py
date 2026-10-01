@@ -26,15 +26,15 @@ EN_TITLES = {
     "A0_budget": "A0  budget calibration (lr x steps)",
 }
 PANELS = [
-    ("Forget Classif (All)  lower = more forgotten",
-     lambda d: P.series_metric(d, "Forget", "Classif")),
+    ("Forget Fill (All)  lower = more forgotten",
+     lambda d: P.series_metric(d, "Forget", "Fill")),
     ("Retain Fill (All)  higher = better kept",
      lambda d: P.series_metric(d, "Retain", "Fill")),
-    ("Forget Cls IT - PT  (positive = IT less forgotten)",
-     lambda d: (P.series_metric(d, "Forget", "Classif", "IT")
-                - P.series_metric(d, "Forget", "Classif", "PT"))
-               if P.series_metric(d, "Forget", "Classif", "IT") is not None
-               and P.series_metric(d, "Forget", "Classif", "PT") is not None else None),
+    ("Forget Fill IT - PT  (positive = IT less forgotten)",
+     lambda d: (P.series_metric(d, "Forget", "Fill", "IT")
+                - P.series_metric(d, "Forget", "Fill", "PT"))
+               if P.series_metric(d, "Forget", "Fill", "IT") is not None
+               and P.series_metric(d, "Forget", "Fill", "PT") is not None else None),
     ("Retain Fill IT - PT  (positive = IT better kept)",
      lambda d: (P.series_metric(d, "Retain", "Fill", "IT")
                 - P.series_metric(d, "Retain", "Fill", "PT"))

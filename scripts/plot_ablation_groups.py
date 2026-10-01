@@ -103,12 +103,12 @@ def legend(entries, x, y):
 
 def build_family_svg(name, title, tags, runs, outdir):
     series_specs = [
-        ("Forget Classif (All)", lambda d: series_metric(d, "Forget", "Classif")),
+        ("Forget Fill (All)", lambda d: series_metric(d, "Forget", "Fill")),
         ("Retain Fill (All)", lambda d: series_metric(d, "Retain", "Fill")),
-        ("Forget Cls IT - PT", lambda d: (
-            series_metric(d, "Forget", "Classif", "IT") - series_metric(d, "Forget", "Classif", "PT")
-            if series_metric(d, "Forget", "Classif", "IT") is not None
-            and series_metric(d, "Forget", "Classif", "PT") is not None else None)),
+        ("Forget Fill IT - PT", lambda d: (
+            series_metric(d, "Forget", "Fill", "IT") - series_metric(d, "Forget", "Fill", "PT")
+            if series_metric(d, "Forget", "Fill", "IT") is not None
+            and series_metric(d, "Forget", "Fill", "PT") is not None else None)),
         ("Retain Fill IT - PT", lambda d: (
             series_metric(d, "Retain", "Fill", "IT") - series_metric(d, "Retain", "Fill", "PT")
             if series_metric(d, "Retain", "Fill", "IT") is not None
