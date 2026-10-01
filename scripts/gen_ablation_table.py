@@ -170,22 +170,140 @@ def build_doc(rows, epoch_note):
     return "\n".join(lines) + "\n"
 
 
+PM_COLS = (("label", "method"), ("beta", "$\\beta$"), ("alpha", "$\\alpha$"),
+           ("rho", "$\\rho$"), ("gamma_mode", "$\\gamma$mode"),
+           ("gamma_fixed", "$\\gamma$fix"), ("coeff", "coeff"),
+           ("max_steps", "max steps"))
+PM_SPEC = [(g, t, m) for g in ("Forget", "Retain", "Real")
+           for t in ("Fill", "Classif", "Gen") for m in ("IT", "PT")]
+
+
+def pm_best_worst(rows):
+    best, worst = {}, {}
+    for ci, (g, t, m) in enumerate(PM_SPEC):
+        pairs = []
+        for tag, cfg, data, st in rows:
+            it, pt, al = G._task_vals(data, g, t)
+            v = {"IT": it, "PT": pt}[m]
+            if v is not None:
+                pairs.append((tag, v))
+        if not pairs:
+            continue
+        high = g != "Forget"
+        best[ci] = (max if high else min)(pairs, key=lambda x: x[1])[0]
+        worst[ci] = (min if high else max)(pairs, key=lambda x: x[1])[0]
+    return best, worst
+
+
+def pm_cell(data, ci, tag, best, worst):
+    g, t, m = PM_SPEC[ci]
+    it, pt, al = G._task_vals(data, g, t)
+    v = {"IT": it, "PT": pt}[m]
+    s = "—" if v is None else G._fmt_val(t, v)
+    if v is not None:
+        if best.get(ci) == tag:
+            s = f"\\textcolor{{umugreen}}{{{s}}}"
+        elif worst.get(ci) == tag:
+            s = f"\\textcolor{{umured}}{{{s}}}"
+    return s
+
+
+def pm_head(lead):
+    start = lead + 1
+    line1 = "Tag & " + " & ".join(lbl for _, lbl in PM_COLS) + " & steps"
+    line1 += (" & \\multicolumn{6}{c}{Forget} & \\multicolumn{6}{c}{Retain}"
+              " & \\multicolumn{6}{c}{Real} \\\\\n")
+    line1 += (f"\\cmidrule(lr){{{start}-{start+5}}}"
+              f" \\cmidrule(lr){{{start+6}-{start+11}}}"
+              f" \\cmidrule(lr){{{start+12}-{start+17}}}\n")
+    blanks = " & ".join([""] * lead)
+    line2 = blanks + " & " + " & ".join(
+        ["\\multicolumn{2}{c}{Fill}", "\\multicolumn{2}{c}{Classif}",
+         "\\multicolumn{2}{c}{Gen}"] * 3) + " \\\\\n"
+    cm = []
+    for n in range(9):
+        a = start + 2 * n
+        cm.append(f"\\cmidrule(lr){{{a}-{a+1}}}")
+    line2 += " ".join(cm) + "\n"
+    line3 = blanks + " & " + " & ".join(["IT", "PT"] * 9) + " \\\\"
+    return line1 + line2 + line3
+
+
+def build_doc_pm(rows, note):
+    lead = len(PM_COLS) + 2
+    ncols = lead + len(PM_SPEC)
+    best, worst = pm_best_worst(rows)
+    lines = [
+        "\\documentclass{article}",
+        "\\usepackage[UTF8]{ctex}",
+        "\\usepackage[landscape,margin=0.6in]{geometry}",
+        "\\usepackage{booktabs}",
+        "\\usepackage{longtable}",
+        "\\usepackage[table]{xcolor}",
+        "\\definecolor{umugreen}{HTML}{228B22}",
+        "\\definecolor{umured}{HTML}{B22222}",
+        "\\begin{document}",
+        "\\title{MAW Ablation per-modal (forget ratio 5, $\\lambda=0$)}",
+        "\\maketitle",
+        "\\noindent\\small\\emph{%s}" % G.esc(note),
+        "",
+        "{\\scriptsize\\setlength{\\tabcolsep}{1.5pt}",
+        "\\begin{longtable}{l" + "c" * (ncols - 1) + "}",
+        "\\toprule",
+        pm_head(lead),
+        "\\midrule",
+        "\\endfirsthead",
+        "\\toprule",
+        pm_head(lead),
+        "\\midrule",
+        "\\endhead",
+    ]
+    for tag, cfg, data, st in rows:
+        cells = [G.esc(tag)]
+        for key, _ in PM_COLS:
+            v = cfg.get(key)
+            cells.append("" if v is None else G.esc(v))
+        cells.append("" if st is None else str(st))
+        cells += [pm_cell(data, ci, tag, best, worst) for ci in range(len(PM_SPEC))]
+        lines.append(" & ".join(cells) + " \\\\")
+    lines += [
+        "\\bottomrule",
+        "\\end{longtable}",
+        "}",
+        "",
+        "\\noindent\\small\\emph{IT = image-textual, PT = pure-text; each cell = All-column equivalent for that modality.}",
+        "\\end{document}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="../product")
     ap.add_argument("--sub", default="ablation")
     ap.add_argument("--out", default="ablations/MAW_ablation.tex")
     ap.add_argument("--note", default="metrics from last checkpoint of each run")
+    ap.add_argument("--per-modal", action="store_true")
+    ap.add_argument("--include-cal", action="store_true")
     args = ap.parse_args()
     results_root = os.path.join(args.root, "results", args.sub)
     rows = collect(results_root)
     if not rows:
         print(f"no runs under {results_root}")
         return
-    out_path = os.path.join(args.root, "record", args.out)
+    if args.per_modal:
+        if not args.include_cal:
+            rows = [r for r in rows if not r[0].startswith("cal_")]
+        out = args.out if args.out != "ablations/MAW_ablation.tex" else "ablations/MAW_ablation_pm.tex"
+        doc = build_doc_pm(rows, args.note)
+    else:
+        out = args.out
+        doc = build_doc(rows, args.note)
+    out_path = os.path.join(args.root, "record", out)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(build_doc(rows, args.note))
+        f.write(doc)
     print(f"written {out_path} ({len(rows)} runs)")
 
 
