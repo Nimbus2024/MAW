@@ -444,6 +444,8 @@ def main(args):
 
     # M0 = gap 的 EMA, 从 0 开始
     gap_ema = 0.0
+    level_ema = 0.0
+    ctrl_step = 0
 
     # ═══════════════════════════════════════════════════
     # 训练循环
@@ -478,10 +480,20 @@ def main(args):
                 M_uni = accelerator.reduce(M_uni, reduction="mean")
                 gap = float(M_mul - M_uni)
                 gap_ema_prev = gap_ema
+                ctrl_step += 1
+                s_hat = 0.0
                 if args.gamma_mode == "sigmoid_ema":
                     gamma = 1.0 / (1.0 + math.exp(-(args.alpha * (gap - gap_ema))))
                 elif args.gamma_mode == "sigmoid_gap":
                     gamma = 1.0 / (1.0 + math.exp(-(args.alpha * gap)))
+                elif args.gamma_mode == "ema_level":
+                    level_ema = args.rho * level_ema + (1.0 - args.rho) * gap
+                    if args.bias_correct == "off" or args.rho >= 1.0:
+                        s_hat = float(gap) if args.rho >= 1.0 else level_ema
+                    else:
+                        denom = 1.0 - (args.rho ** ctrl_step)
+                        s_hat = level_ema / denom if denom > 1e-8 else float(gap)
+                    gamma = 1.0 / (1.0 + math.exp(-(args.alpha * s_hat)))
                 else:
                     gamma = float(args.gamma_fixed)
                 gap_ema = args.rho * gap_ema + (1.0 - args.rho) * gap
@@ -531,6 +543,8 @@ def main(args):
                 writer.add_scalar("gamma", gamma, global_step)
                 writer.add_scalar("controller/s", gap - gap_ema_prev, global_step)
                 writer.add_scalar("controller/alpha_s", args.alpha * (gap - gap_ema_prev), global_step)
+                writer.add_scalar("controller/level_ema", level_ema, global_step)
+                writer.add_scalar("controller/s_hat", s_hat, global_step)
                 writer.add_scalar("M/gap_ema", gap_ema.item() if hasattr(gap_ema, 'item') else gap_ema, global_step)
                 writer.add_scalar("M/multimodal_margin", M_mul.item() if hasattr(M_mul, 'item') else M_mul, global_step)
                 writer.add_scalar("M/unimodal_margin", M_uni.item() if hasattr(M_uni, 'item') else M_uni, global_step)
@@ -624,9 +638,13 @@ if __name__ == "__main__":
     # Dynamic gamma: γ = σ(α·(gap − gap_ema)), gap_ema 用 --rho 平滑(M0)
     parser.add_argument("--rho", type=float, default=0.8,
                         help="EMA smoothing coefficient for the margin gap (M0)")
-    parser.add_argument("--gamma_mode", choices=("sigmoid_ema", "sigmoid_gap", "fixed"),
+    parser.add_argument("--gamma_mode",
+                        choices=("sigmoid_ema", "sigmoid_gap", "fixed", "ema_level"),
                         default="sigmoid_ema",
-                        help="E7 控制器: sigmoid_ema=σ(α(gap−EMA)); sigmoid_gap=σ(α·gap); fixed=常数")
+                        help="E7 控制器: sigmoid_ema=σ(α(gap−EMA)); sigmoid_gap=σ(α·gap); "
+                             "ema_level=σ(α·EMA_hat(gap)) (水平信号+偏差校正); fixed=常数")
+    parser.add_argument("--bias_correct", choices=("on", "off"), default="on",
+                        help="ema_level 模式下对 EMA 做 Adam 式偏差校正: s_hat=s/(1-rho^t)")
     parser.add_argument("--gamma_fixed", type=float, default=0.5,
                         help="gamma_mode=fixed 时的常数 γ")
     parser.add_argument("--alpha", type=float, default=1.0,
