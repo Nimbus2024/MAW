@@ -23,6 +23,9 @@ EN_TITLES = {
     "G3_beta": "G3  beta (0.1 -> 0.8)",
     "G4_alpha": "G4  alpha (0.5 -> 3)",
     "G5_coeff": "G5  coefficient: inv_beta vs one (DPO)",
+    "G6_level_vs_baseline": "G6  level-EMA vs residual-EMA vs fixed vs DPO",
+    "G7_level_rho": "G7  level-EMA rho sweep (alpha=1)",
+    "G8_level_alpha": "G8  level-EMA alpha sweep (rho=0.5)",
     "A0_budget": "A0  budget calibration (lr x steps)",
 }
 PANELS = [
