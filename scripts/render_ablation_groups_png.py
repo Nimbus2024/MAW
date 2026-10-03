@@ -45,49 +45,55 @@ PANELS = [
      lambda run, eps: [(P.series_metric(run["epochs"][e], "Retain", "Fill", "IT")
                         - P.series_metric(run["epochs"][e], "Retain", "Fill", "PT"))
                        if e in run["epochs"] else None for e in eps]),
-    ("gamma (per-epoch mean)",
-     lambda run, eps: [run["gamma_epoch"].get(e) for e in eps]),
+    ("gamma vs step  (gray = 0.5)",
+     "gamma"),
 ]
 
 
-def draw_panel(draw, x0, y0, w, h, title, series, color_of):
+def draw_panel(draw, x0, y0, w, h, title, series, color_of, xlabel="epoch", refline=None):
     draw.rectangle([x0, y0, x0 + w, y0 + h], fill=(255, 255, 255), outline=(120, 120, 120), width=2)
     draw.text((x0, y0 - 30), title, fill=(0, 0, 0), font=F_PANEL)
-    vals = [v for _, ys in series for v in ys if v is not None]
+    norm = []
+    for item in series:
+        tag = item[0]
+        if len(item) == 3:
+            norm.append((tag, item[1], item[2]))
+        else:
+            ys = item[1]
+            norm.append((tag, list(range(1, len(ys) + 1)), ys))
+    vals = [v for _, _, ys in norm for v in ys if v is not None]
     if not vals:
         return
+    xmin = min(xs[0] for _, xs, _ in norm if xs)
+    xmax = max(xs[-1] for _, xs, _ in norm if xs)
     vmin, vmax = min(vals), max(vals)
-    pad = (vmax - vmin) * 0.15 or 1.0
+    pad = (vmax - vmin) * 0.12 or 1.0
     vmin -= pad
     vmax += pad
-    n = max((len(ys) for _, ys in series), default=1)
     for k in range(5):
         yv = vmin + (vmax - vmin) * k / 4
         yy = y0 + h - h * k / 4
         draw.line([x0, yy, x0 + w, yy], fill=(235, 235, 235))
         draw.text((x0 - 78, yy - 10), f"{yv:.2f}", fill=(90, 90, 90), font=F_TICK)
-    for i in range(n):
-        xx = x0 + w * i / max(n - 1, 1)
-        draw.line([xx, y0, xx, y0 + h], fill=(245, 245, 245))
-        draw.text((xx - 5, y0 + h + 8), str(i + 1), fill=(90, 90, 90), font=F_TICK)
-    draw.text((x0 + w / 2 - 22, y0 + h + 30), "epoch", fill=(60, 60, 60), font=F_AXIS)
-    for tag, ys in series:
+    if refline is not None and vmin <= refline <= vmax:
+        yr = y0 + h - h * (refline - vmin) / (vmax - vmin)
+        for xx in range(int(x0), int(x0 + w), 22):
+            draw.line([xx, yr, xx + 11, yr], fill=(160, 160, 160), width=2)
+        draw.text((x0 + w - 58, yr - 26), f"{refline:g}", fill=(120, 120, 120), font=F_TICK)
+    for k in range(6):
+        xv = xmin + (xmax - xmin) * k / 5
+        xx = x0 + w * k / 5
+        draw.text((xx - 10, y0 + h + 8), f"{int(xv)}", fill=(90, 90, 90), font=F_TICK)
+    draw.text((x0 + w / 2 - 18, y0 + h + 32), xlabel, fill=(60, 60, 60), font=F_AXIS)
+    for tag, xs, ys in norm:
         col = color_of(tag)
-        pts = []
-        for i, v in enumerate(ys):
-            if v is None:
-                continue
-            xx = x0 + w * i / max(n - 1, 1)
-            yy = y0 + h - h * (v - vmin) / (vmax - vmin)
-            pts.append((xx, yy))
+        pts = [(x0 + w * (x - xmin) / max(xmax - xmin, 1), y0 + h - h * (v - vmin) / (vmax - vmin))
+               for x, v in zip(xs, ys) if v is not None]
         if len(pts) >= 2:
-            draw.line(pts, fill=col, width=4)
-        for pt in pts:
-            draw.ellipse([pt[0] - 5, pt[1] - 5, pt[0] + 5, pt[1] + 5], fill=col, outline=(255, 255, 255))
+            draw.line(pts, fill=col, width=3)
         lastv = next((v for v in reversed(ys) if v is not None), None)
         if pts and lastv is not None:
-            lx, ly = pts[-1]
-            draw.text((lx + 8, ly - 10), f"{lastv:.1f}", fill=col, font=F_TICK)
+            draw.text((pts[-1][0] + 6, pts[-1][1] - 10), f"{lastv:.1f}", fill=col, font=F_TICK)
 
 
 def render_family(name, title, tags, runs, outdir):
@@ -105,15 +111,23 @@ def render_family(name, title, tags, runs, outdir):
             lx, ly = 30, ly + 34
     y_base = ly + 50
     ep_all = sorted(set().union(*[set(runs[t]["epochs"]) for t in present]))
-    for i, (label, fn) in enumerate(PANELS):
+    for i, (label, kind) in enumerate(PANELS):
         x0 = 110 + (i % 2) * 900
         y0 = y_base + (i // 2) * 530
         series = []
+        if kind == "gamma":
+            for tag in present:
+                gam = runs[tag]["gamma"]
+                steps = runs[tag]["cfg"].get("max_steps") or max(len(gam) // 2, 1)
+                xs = [round(j * (steps - 1) / max(len(gam) - 1, 1)) + 1 for j in range(len(gam))]
+                series.append((tag, xs, gam))
+            draw_panel(draw, x0, y0, 820, 460, label, series, color_of, xlabel="step", refline=0.5)
+            continue
         for tag in present:
-            ys = fn(runs[tag], ep_all)
+            ys = kind(runs[tag], ep_all)
             if any(v is not None for v in ys):
                 series.append((tag, ys))
-        draw_panel(draw, x0, y0, 820, 460, label, series, color_of)
+        draw_panel(draw, x0, y0, 820, 460, label, series, color_of, xlabel="epoch")
     path = os.path.join(outdir, f"{name}.png")
     img.save(path)
     return path
