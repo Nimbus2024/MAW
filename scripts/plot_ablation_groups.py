@@ -61,7 +61,16 @@ def load_runs(root):
                 epochs[ep] = G.parse_final(os.path.dirname(js[0]))
         txt = open(log, encoding="utf-8", errors="ignore").read()
         gam = [float(x) for x in re.findall(r"gamma=([0-9.]+)", txt)]
-        runs[tag] = {"cfg": cfg, "epochs": epochs, "gamma": gam}
+        n_ep = len(epochs) or 1
+        gamma_epoch = {}
+        if gam:
+            for i in range(n_ep):
+                lo = int(i * len(gam) / n_ep)
+                hi = int((i + 1) * len(gam) / n_ep)
+                chunk = gam[lo:hi]
+                if chunk:
+                    gamma_epoch[i + 1] = sum(chunk) / len(chunk)
+        runs[tag] = {"cfg": cfg, "epochs": epochs, "gamma": gam, "gamma_epoch": gamma_epoch}
     return runs
 
 

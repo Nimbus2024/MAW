@@ -32,19 +32,21 @@ EN_TITLES = {
 }
 PANELS = [
     ("Forget Fill (All)  lower = more forgotten",
-     lambda d: P.series_metric(d, "Forget", "Fill")),
+     lambda run, eps: [P.series_metric(run["epochs"][e], "Forget", "Fill") if e in run["epochs"] else None for e in eps]),
     ("Retain Fill (All)  higher = better kept",
-     lambda d: P.series_metric(d, "Retain", "Fill")),
+     lambda run, eps: [P.series_metric(run["epochs"][e], "Retain", "Fill") if e in run["epochs"] else None for e in eps]),
+    ("Real Fill (All)  higher = better",
+     lambda run, eps: [P.series_metric(run["epochs"][e], "Real", "Fill") if e in run["epochs"] else None for e in eps]),
     ("Forget Fill IT - PT  (positive = IT less forgotten)",
-     lambda d: (P.series_metric(d, "Forget", "Fill", "IT")
-                - P.series_metric(d, "Forget", "Fill", "PT"))
-               if P.series_metric(d, "Forget", "Fill", "IT") is not None
-               and P.series_metric(d, "Forget", "Fill", "PT") is not None else None),
+     lambda run, eps: [(P.series_metric(run["epochs"][e], "Forget", "Fill", "IT")
+                        - P.series_metric(run["epochs"][e], "Forget", "Fill", "PT"))
+                       if e in run["epochs"] else None for e in eps]),
     ("Retain Fill IT - PT  (positive = IT better kept)",
-     lambda d: (P.series_metric(d, "Retain", "Fill", "IT")
-                - P.series_metric(d, "Retain", "Fill", "PT"))
-               if P.series_metric(d, "Retain", "Fill", "IT") is not None
-               and P.series_metric(d, "Retain", "Fill", "PT") is not None else None),
+     lambda run, eps: [(P.series_metric(run["epochs"][e], "Retain", "Fill", "IT")
+                        - P.series_metric(run["epochs"][e], "Retain", "Fill", "PT"))
+                       if e in run["epochs"] else None for e in eps]),
+    ("gamma (per-epoch mean)",
+     lambda run, eps: [run["gamma_epoch"].get(e) for e in eps]),
 ]
 
 
@@ -82,15 +84,16 @@ def draw_panel(draw, x0, y0, w, h, title, series, color_of):
             draw.line(pts, fill=col, width=4)
         for pt in pts:
             draw.ellipse([pt[0] - 5, pt[1] - 5, pt[0] + 5, pt[1] + 5], fill=col, outline=(255, 255, 255))
-        if pts:
+        lastv = next((v for v in reversed(ys) if v is not None), None)
+        if pts and lastv is not None:
             lx, ly = pts[-1]
-            draw.text((lx + 8, ly - 10), f"{ys[-1]:.1f}", fill=col, font=F_TICK)
+            draw.text((lx + 8, ly - 10), f"{lastv:.1f}", fill=col, font=F_TICK)
 
 
 def render_family(name, title, tags, runs, outdir):
     color_of = lambda tag: P.COLORS[tags.index(tag) % len(P.COLORS)]
     present = [t for t in tags if t in runs]
-    img = Image.new("RGB", (1960, 1560), (255, 255, 255))
+    img = Image.new("RGB", (1960, 360 + 3 * 530), (255, 255, 255))
     draw = ImageDraw.Draw(img)
     draw.text((30, 22), EN_TITLES.get(name, title), fill=(0, 0, 0), font=F_TITLE)
     lx, ly = 30, 78
@@ -101,15 +104,16 @@ def render_family(name, title, tags, runs, outdir):
         if lx > 1500:
             lx, ly = 30, ly + 34
     y_base = ly + 50
-    positions = [(110, y_base), (1010, y_base), (110, y_base + 660), (1010, y_base + 660)]
-    for (label, fn), (x0, y0) in zip(PANELS, positions):
+    ep_all = sorted(set().union(*[set(runs[t]["epochs"]) for t in present]))
+    for i, (label, fn) in enumerate(PANELS):
+        x0 = 110 + (i % 2) * 900
+        y0 = y_base + (i // 2) * 530
         series = []
         for tag in present:
-            eps = runs[tag]["epochs"]
-            ys = [fn(eps[e]) if e in eps else None for e in sorted(eps)]
+            ys = fn(runs[tag], ep_all)
             if any(v is not None for v in ys):
                 series.append((tag, ys))
-        draw_panel(draw, x0, y0, 820, 500, label, series, color_of)
+        draw_panel(draw, x0, y0, 820, 460, label, series, color_of)
     path = os.path.join(outdir, f"{name}.png")
     img.save(path)
     return path
