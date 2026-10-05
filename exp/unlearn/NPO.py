@@ -119,6 +119,30 @@ def _snapshot_grads(named_params):
     return {n: p.grad.detach().clone() for n, p in named_params if p.grad is not None}
 
 
+def _balance_modality_grads(named_params, snap, eps=1e-12):
+    """P1: 把 mm/um 两模态梯度各自归一到单位范数后再相加, 消除尺度差。
+
+    入参 snap 取自 mm backward 之后 (即 g_mm)。此时 p.grad = g_mm + alpha*g_um,
+    将其改写为 g_mm/||g_mm|| + (p.grad-g_mm)/||p.grad-g_mm||。
+    """
+    tot_mm = 0.0
+    tot_um = 0.0
+    for n, p in named_params:
+        if p.grad is None or n not in snap:
+            continue
+        s = snap[n].float()
+        tot_mm += float(s.pow(2).sum())
+        tot_um += float((p.grad.detach().float() - s).pow(2).sum())
+    n_mm = max(tot_mm ** 0.5, eps)
+    n_um = max(tot_um ** 0.5, eps)
+    for n, p in named_params:
+        if p.grad is None or n not in snap:
+            continue
+        s = snap[n]
+        p.grad.copy_(s / n_mm + (p.grad.detach() - s) / n_um)
+    return n_mm, n_um
+
+
 class GradAccountant:
     """逐模态梯度范数 / 余弦记账（按参数组聚合，跨 rank 求和）。"""
 
@@ -248,12 +272,12 @@ def main(args):
     do_um = args.modality in ("both", "um")
     accountant = None
     grad_log_f = None
-    if args.grad_log:
+    if args.grad_log or args.grad_balance:
         accountant = GradAccountant(
             accelerator, _trainable_named_params(accelerator.unwrap_model(model)))
-        if accelerator.is_main_process:
-            grad_log_f = open(
-                os.path.join(args.run_dir, "logs", "grad_norms.jsonl"), "w")
+    if args.grad_log and accelerator.is_main_process:
+        grad_log_f = open(
+            os.path.join(args.run_dir, "logs", "grad_norms.jsonl"), "w")
 
     global_step = 0
     for epoch in range(args.num_epochs):
@@ -285,7 +309,11 @@ def main(args):
                 single = None if (do_mm and do_um) else ("mm" if do_mm else "um")
                 grad_stats = accountant.finalize(
                     accountant.collect(args.alpha, single))
-            accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if args.grad_balance and do_mm and do_um and accountant is not None:
+                _balance_modality_grads(
+                    _trainable_named_params(accelerator.unwrap_model(model)),
+                    accountant.snap)
+            accelerator.clip_grad_norm_(model.parameters(), max_norm=args.clip_max_norm)
             optimizer.step()
             optimizer.zero_grad()
             lr_scheduler.step()
@@ -388,6 +416,10 @@ if __name__ == "__main__":
                         help="E1 模态隔离: both=联合; mm=仅视觉(IT) forget; um=仅文本(PT) forget")
     parser.add_argument("--grad_log", action="store_true",
                         help="E5 记账: 写 logs/grad_norms.jsonl (逐模态梯度范数/余弦/margin)")
+    parser.add_argument("--clip_max_norm", type=float, default=1.0,
+                        help="P2: clip_grad_norm_ 的 max_norm (默认 1.0)")
+    parser.add_argument("--grad_balance", action="store_true",
+                        help="P1: 两模态梯度各自归一到单位范数后再相加 (消除尺度差)")
     args = parser.parse_args()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
