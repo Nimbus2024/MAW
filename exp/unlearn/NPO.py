@@ -313,6 +313,10 @@ def main(args):
                 _balance_modality_grads(
                     _trainable_named_params(accelerator.unwrap_model(model)),
                     accountant.snap)
+            if args.grad_scale != 1.0:
+                for _, p in _trainable_named_params(accelerator.unwrap_model(model)):
+                    if p.grad is not None:
+                        p.grad.mul_(args.grad_scale)
             accelerator.clip_grad_norm_(model.parameters(), max_norm=args.clip_max_norm)
             optimizer.step()
             optimizer.zero_grad()
@@ -420,6 +424,8 @@ if __name__ == "__main__":
                         help="P2: clip_grad_norm_ 的 max_norm (默认 1.0)")
     parser.add_argument("--grad_balance", action="store_true",
                         help="P1: 两模态梯度各自归一到单位范数后再相加 (消除尺度差)")
+    parser.add_argument("--grad_scale", type=float, default=1.0,
+                        help="P2 对照: clip 前把梯度乘常数 (测 Adam 尺度不变性/有效幅度)")
     args = parser.parse_args()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")

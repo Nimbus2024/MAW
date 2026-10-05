@@ -65,6 +65,9 @@ for ST in "${STAGE_ARR[@]}"; do
     p0)   run_one p0clip1.0 both --clip_max_norm 1.0 --grad_log ;;
     p1)   run_one p1bal both --grad_balance ;;
     p2)   for c in ${CLIPS}; do run_one "clip${c}" both --clip_max_norm "${c}" --grad_log; done ;;
+    p2c)  run_one noclip_gs0.04 both --clip_max_norm 1e9 --grad_scale 0.04 --grad_log
+          run_one noclip_gs0.20 both --clip_max_norm 1e9 --grad_scale 0.20 --grad_log
+          run_one noclip_lr5x   both --clip_max_norm 1e9 --lr 3.1e-5 --grad_log ;;
   esac
 done
 echo "P02 DONE TS=${TS}"
