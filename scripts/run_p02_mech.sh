@@ -35,7 +35,8 @@ done
 cd "${CODE_ROOT}"
 COMMON=(--vanilla_dir "${ORIGIN}" --processor_dir "${ORIGIN}" --data_split_dir "${DATA}"
         --forget_split_ratio 5 --batch_size "${BS}" --lr "${LR}" --num_epochs "${EP}"
-        --beta "${BETA}" --alpha 1.0 --lora_r "${R}" --lora_alpha "${RA}" --max_length 1024)
+        --beta "${BETA}" --alpha 1.0 --lora_r "${R}" --lora_alpha "${RA}" --max_length 1024
+        --gradient_checkpointing)
 
 run_one() {  # $1=tag $2=modality $3...=extra
   local tag="$1" modality="$2"; shift 2
