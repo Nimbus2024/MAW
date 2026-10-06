@@ -241,27 +241,34 @@ def main():
             }
         return o
 
-    order = [t for t in ["origin", "refmm", "refum", "p0clip1.0", "p1bal", "merged_mm_um",
-                         "clip0.2", "clip5.0", "clip100.0",
-                         "noclip_gs0.04", "noclip_gs0.20", "noclip_lr5x"] if raw(t)]
     panels = [("forget", "fill", "Forget Fill  (lower=better)"), ("forget", "cls", "Forget Classif  (lower=better)"),
               ("forget", "gen", "Forget Gen ROUGE-L  (lower=better)"), ("retain", "fill", "Retain Fill  (higher=better)"),
               ("retain", "cls", "Retain Classif  (higher=better)"), ("real", "cls", "Real Classif  (higher=better)")]
-    if order:
+
+    def raw_fig(models, fname, suptitle):
+        models = [t for t in models if raw(t)]
+        if not models:
+            return
         fig, axes = plt.subplots(2, 3, figsize=(16, 8))
         for ax, (scope, task, title) in zip(axes.ravel(), panels):
-            it = [raw(t)[scope][task][0] for t in order]
-            pt = [raw(t)[scope][task][1] for t in order]
-            x = np.arange(len(order)); w = 0.38
+            it = [raw(t)[scope][task][0] for t in models]
+            pt = [raw(t)[scope][task][1] for t in models]
+            x = np.arange(len(models)); w = 0.38
             ax.bar(x - w / 2, it, w, label="IT (mm)", color="tab:blue")
             ax.bar(x + w / 2, pt, w, label="PT (um)", color="tab:red")
-            ax.set_xticks(x); ax.set_xticklabels(order, rotation=40, ha="right", fontsize=7)
+            ax.set_xticks(x); ax.set_xticklabels(models, rotation=40, ha="right", fontsize=7)
             ax.set_title(title, fontsize=10); ax.grid(alpha=.3, axis="y")
             if task in ("fill", "cls"):
                 ax.set_ylim(0, 105)
         axes[0, 0].legend(fontsize=9)
-        fig.suptitle("UMU-bench raw metrics (IT vs PT)", fontsize=12)
-        fig.tight_layout(); save(fig, O, "fig_p6_eval_raw")
+        fig.suptitle(suptitle, fontsize=12)
+        fig.tight_layout(); save(fig, O, fname)
+
+    raw_fig(["origin", "refmm", "refum", "p0clip1.0", "p1bal", "merged_mm_um"],
+            "fig_p6_eval_raw", "UMU-bench raw metrics (IT vs PT): mechanism group")
+    raw_fig(["origin", "p0clip1.0", "clip0.2", "clip5.0", "clip100.0",
+             "noclip_gs0.04", "noclip_gs0.20", "noclip_lr5x"],
+            "fig_p7_eval_raw_p2", "UMU-bench raw metrics (IT vs PT): P2 clip/scale controls")
 
     print("saved figures to", O)
 
