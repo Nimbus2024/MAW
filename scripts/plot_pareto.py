@@ -27,15 +27,17 @@ SETS = {"forget": "Forget Set Results",
         "retain": "Retain Set (shared dataset) Results",
         "real": "Retain Set (real person) Results"}
 TASKS = ("fill", "cls")
-LABELS = {"origin": "origin", "refmm": "refmm", "refum": "refum", "p0clip1.0": "joint(P0)",
-          "p1bal": "gradbal(P1)", "merged_mm_um": "merged(P3)", "clip0.2": "clip0.2",
-          "clip5.0": "clip5", "clip100.0": "clip100",
+LABELS = {"origin": "origin", "refmm": "refmm", "refum": "refum",
+          "clip0.2": "clip0.2", "p0clip1.0": "joint(P0)=clip1.0", "clip5.0": "clip5",
+          "clip100.0": "clip100", "p1bal": "gradbal(P1)", "merged_mm_um": "merged(P3)",
           "noclip_gs0.04": "gs0.04", "noclip_gs0.20": "gs0.20"}
-MODELS = list(LABELS)
-COLORS = {"origin": "#FFD700", "refmm": "#1f77b4", "refum": "#ff7f0e", "p0clip1.0": "#2ca02c",
-          "p1bal": "#d62728", "merged_mm_um": "#9467bd", "clip0.2": "#8c564b",
-          "clip5.0": "#e377c2", "clip100.0": "#7f7f7f",
-          "noclip_gs0.04": "#bcbd22", "noclip_gs0.20": "#17becf"}
+MODELS = ["origin", "refmm", "refum", "clip0.2", "p0clip1.0", "clip5.0", "clip100.0",
+          "p1bal", "merged_mm_um", "noclip_gs0.04", "noclip_gs0.20"]
+COLORS = {"origin": "#FFD700",
+          "refmm": "#1f77b4", "refum": "#ff7f0e",
+          "clip0.2": "#7f0000", "p0clip1.0": "#c62828", "clip5.0": "#ef5350", "clip100.0": "#ffb3b0",
+          "p1bal": "#2ca02c", "merged_mm_um": "#9467bd",
+          "noclip_gs0.04": "#424242", "noclip_gs0.20": "#9e9e9e"}
 
 
 def save(fig, outdir, name):
@@ -136,8 +138,9 @@ def main():
         h, l = draw(ax, pts, f"forget-{task} AllErr (higher = both forgotten)",
                     f"retain-{task} AllAcc (higher = both kept)", f"P1  forget-a vs retain-d  ({task})")
     fig.legend(h, l, loc="lower center", ncol=6, fontsize=8, frameon=False)
-    fig.suptitle("Pareto: consistent forgetting vs consistent retention "
-                 "(dashed = non-dominated frontier)", fontsize=11)
+    fig.suptitle("Pareto: consistent forgetting vs consistent retention   "
+                 "[reds = clip max_norm 0.2/1/5/100; grey = no-clip grad_scale; dashed = frontier]",
+                 fontsize=10)
     fig.tight_layout(rect=(0, 0.06, 1, 0.96)); save(fig, out, "fig_p8_pareto_forget_retain"); plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
@@ -146,8 +149,9 @@ def main():
         h, l = draw(ax, pts, f"forget-{task} AllErr (higher = both forgotten)",
                     f"real-{task} AllAcc (higher = both kept)", f"P2  forget-a vs real-d  ({task})")
     fig.legend(h, l, loc="lower center", ncol=6, fontsize=8, frameon=False)
-    fig.suptitle("Pareto: consistent forgetting vs real-person retention "
-                 "(dashed = non-dominated frontier)", fontsize=11)
+    fig.suptitle("Pareto: consistent forgetting vs real-person retention   "
+                 "[reds = clip max_norm 0.2/1/5/100; grey = no-clip grad_scale; dashed = frontier]",
+                 fontsize=10)
     fig.tight_layout(rect=(0, 0.06, 1, 0.96)); save(fig, out, "fig_p9_pareto_forget_real"); plt.close(fig)
 
     fig, axes = plt.subplots(3, 2, figsize=(13, 13))
@@ -159,7 +163,8 @@ def main():
             h, l = draw(ax, pts, f"forget-{task} AllErr (higher = more forgotten)",
                         f"{scope}-{task} oe (lower = more balanced)", f"{scope} / {task}", frontier=False)
     fig.legend(h, l, loc="lower center", ncol=6, fontsize=9, frameon=False)
-    fig.suptitle("oe vs forget-a  (ideal: bottom-right)", fontsize=13)
+    fig.suptitle("oe vs forget-a  (ideal: bottom-right)   "
+                 "[reds = clip max_norm 0.2/1/5/100; grey = no-clip grad_scale]", fontsize=12)
     fig.tight_layout(rect=(0, 0.045, 1, 0.975)); save(fig, out, "fig_p10_oe_vs_forgeta"); plt.close(fig)
 
     print("saved 3 figures to", out)
