@@ -52,26 +52,5 @@ def main():
                 cells.append(f"{a:.3f}/{b:.3f}".rjust(16))
             print(f"{t:>16} | " + " | ".join(cells))
 
-    # bench-level "effect fraction" vs single-modality references (forget scope)
-    def frac(tag, ref, scope, task, idx):
-        if not (R[tag] and R[ref] and R["origin"]):
-            return None
-        base = R["origin"][scope][task][idx]
-        denom = R[ref][scope][task][idx] - base
-        if abs(denom) < 1e-9:
-            return None
-        return (R[tag][scope][task][idx] - base) / denom
-    print("\n=== forget: 相对单模态参照的效应实现比例 (bench) ===")
-    print(f"{'model':>16} | Fill IT | Cls IT | Gen IT | Fill PT | Cls PT | Gen PT")
-    for t in tags:
-        row = []
-        for task in ("fill", "cls", "gen"):
-            row.append(frac(t, "refmm", "forget", task, 0))
-        for task in ("fill", "cls", "gen"):
-            row.append(frac(t, "refum", "forget", task, 1))
-        print(f"{t:>16} | " + " | ".join(
-            ("   ---  " if v is None else f"{v:+.2f}") for v in row))
-
-
 if __name__ == "__main__":
     main()
