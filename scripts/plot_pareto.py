@@ -6,15 +6,15 @@
   fig_p9_pareto_forget_real     forget-a × real-d             (Fill / Cls)
   fig_p10_oe_vs_forgeta         oe × forget-a, 3x2 网格 (set × task)
 
+标注方式: 每个模型一种固定颜色, 图例统一在图上; 坐标完全重合的点做小抖动避免遮挡。
 非支配前沿: 两目标都"越大越好"时标出非支配点并画阶梯线。
-坐标相同的模型会合并成一个点并联合标注（如 "joint(P0) = clip0.2"）。
-数据: results/_analysis/p02_eval_<tag>/<tag>_final_evaluation_results.json
 """
 from __future__ import annotations
 
 import argparse
 import glob
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -32,7 +32,10 @@ LABELS = {"origin": "origin", "refmm": "refmm", "refum": "refum", "p0clip1.0": "
           "clip5.0": "clip5", "clip100.0": "clip100",
           "noclip_gs0.04": "gs0.04", "noclip_gs0.20": "gs0.20"}
 MODELS = list(LABELS)
-OFFSETS = [(6, 4), (6, -12), (-58, 4), (-58, -12), (6, 14), (-58, 14)]
+COLORS = {"origin": "#FFD700", "refmm": "#1f77b4", "refum": "#ff7f0e", "p0clip1.0": "#2ca02c",
+          "p1bal": "#d62728", "merged_mm_um": "#9467bd", "clip0.2": "#8c564b",
+          "clip5.0": "#e377c2", "clip100.0": "#7f7f7f",
+          "noclip_gs0.04": "#bcbd22", "noclip_gs0.20": "#17becf"}
 
 
 def save(fig, outdir, name):
@@ -63,40 +66,52 @@ def load(root, tag):
     return out
 
 
-def groups(pts):
+def jitter(pts, r=0.004):
     g = defaultdict(list)
     for x, y, n in pts:
-        g[(round(x, 3), round(y, 3))].append(n)
-    return sorted(g.items())
+        g[(round(x, 4), round(y, 4))].append((x, y, n))
+    out = []
+    for items in g.values():
+        if len(items) == 1:
+            out.append(items[0])
+        else:
+            for i, (x, y, n) in enumerate(items):
+                ang = 2 * math.pi * i / len(items)
+                out.append((x + r * math.cos(ang), y + r * math.sin(ang), n))
+    return out
 
 
-def nondominated(pts):
-    keys = []
-    for (x, y), _ in groups(pts):
-        if not any((x2 >= x and y2 >= y and (x2 > x or y2 > y))
-                   for (x2, y2), _ in groups(pts) if (x2, y2) != (x, y)):
-            keys.append((x, y))
-    return sorted(keys)
+def nondominated(pts, tol=5e-3):
+    keys = [(x, y) for x, y, _ in pts]
+    nd = []
+    for i, (x, y) in enumerate(keys):
+        if any((x2 >= x - tol and y2 >= y - tol and (x2 > x + tol or y2 > y + tol))
+               for j, (x2, y2) in enumerate(keys) if j != i):
+            continue
+        nd.append((x, y))
+    return sorted(nd)
 
 
 def draw(ax, pts, xlabel, ylabel, title, frontier=True):
-    nds = nondominated(pts) if frontier else []
-    for i, ((x, y), names) in enumerate(groups(pts)):
-        base = "origin" in names
-        nd = (x, y) in nds
-        ax.scatter([x], [y], s=110 if base else 70, marker="*" if base else "o",
-                   facecolors="gold" if base else ("none" if nd else "tab:blue"),
-                   edgecolors="crimson" if nd else "black", linewidths=1.7, zorder=3)
-        ax.annotate(" = ".join(LABELS[n] for n in names), (x, y), textcoords="offset points",
-                    xytext=OFFSETS[i % len(OFFSETS)], fontsize=7)
+    jp = jitter(pts)
+    nds = nondominated(jp) if frontier else []
+    ndset = set(nds)
+    handles, labels = [], []
+    for x, y, n in jp:
+        base = n == "origin"
+        nd = (round(x, 4), round(y, 4)) in ndset or any(abs(x - a) < 2e-4 and abs(y - b) < 2e-4 for a, b in nds)
+        h = ax.scatter([x], [y], s=170 if base else 62, marker="*" if base else "o",
+                       color=COLORS[n], edgecolors="black" if nd else "k",
+                       linewidths=1.6 if nd else 0.6, zorder=3 + (1 if nd else 0))
+        handles.append(h); labels.append(LABELS[n])
     if frontier and len(nds) >= 2:
         sx, sy = [nds[0][0]], [nds[0][1]]
         for (x1, y1), (x2, y2) in zip(nds, nds[1:]):
             sx += [x2, x2]; sy += [y1, y2]
-        ax.plot(sx, sy, "--", color="crimson", lw=1.3, zorder=2, label="non-dominated frontier")
-        ax.legend(fontsize=8, loc="lower left")
+        ax.plot(sx, sy, "--", color="crimson", lw=1.3, zorder=2)
     ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title, fontsize=10)
-    ax.margins(0.13); ax.grid(alpha=.3)
+    ax.margins(0.12); ax.grid(alpha=.3)
+    return handles, labels
 
 
 def main():
@@ -118,28 +133,34 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     for ax, task in zip(axes, TASKS):
         pts = [(D[t][("forget", task)]["a"], D[t][("retain", task)]["d"], t) for t in D]
-        draw(ax, pts, f"forget-{task} AllErr (higher = both forgotten)",
-             f"retain-{task} AllAcc (higher = both kept)", f"P1  forget-a vs retain-d  ({task})")
-    fig.suptitle("Pareto: consistent forgetting vs consistent retention", fontsize=12)
-    fig.tight_layout(); save(fig, out, "fig_p8_pareto_forget_retain"); plt.close(fig)
+        h, l = draw(ax, pts, f"forget-{task} AllErr (higher = both forgotten)",
+                    f"retain-{task} AllAcc (higher = both kept)", f"P1  forget-a vs retain-d  ({task})")
+    fig.legend(h, l, loc="lower center", ncol=6, fontsize=8, frameon=False)
+    fig.suptitle("Pareto: consistent forgetting vs consistent retention "
+                 "(dashed = non-dominated frontier)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.96)); save(fig, out, "fig_p8_pareto_forget_retain"); plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     for ax, task in zip(axes, TASKS):
         pts = [(D[t][("forget", task)]["a"], D[t][("real", task)]["d"], t) for t in D]
-        draw(ax, pts, f"forget-{task} AllErr (higher = both forgotten)",
-             f"real-{task} AllAcc (higher = both kept)", f"P2  forget-a vs real-d  ({task})")
-    fig.suptitle("Pareto: consistent forgetting vs real-person retention", fontsize=12)
-    fig.tight_layout(); save(fig, out, "fig_p9_pareto_forget_real"); plt.close(fig)
+        h, l = draw(ax, pts, f"forget-{task} AllErr (higher = both forgotten)",
+                    f"real-{task} AllAcc (higher = both kept)", f"P2  forget-a vs real-d  ({task})")
+    fig.legend(h, l, loc="lower center", ncol=6, fontsize=8, frameon=False)
+    fig.suptitle("Pareto: consistent forgetting vs real-person retention "
+                 "(dashed = non-dominated frontier)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.96)); save(fig, out, "fig_p9_pareto_forget_real"); plt.close(fig)
 
     fig, axes = plt.subplots(3, 2, figsize=(13, 13))
+    h = l = None
     for r, scope in enumerate(("forget", "retain", "real")):
         for c, task in enumerate(TASKS):
             ax = axes[r, c]
             pts = [(D[t][("forget", task)]["a"], D[t][(scope, task)]["oe"], t) for t in D]
-            draw(ax, pts, f"forget-{task} AllErr (higher = more forgotten)",
-                 f"{scope}-{task} oe (lower = more balanced)", f"{scope} / {task}", frontier=False)
+            h, l = draw(ax, pts, f"forget-{task} AllErr (higher = more forgotten)",
+                        f"{scope}-{task} oe (lower = more balanced)", f"{scope} / {task}", frontier=False)
+    fig.legend(h, l, loc="lower center", ncol=6, fontsize=9, frameon=False)
     fig.suptitle("oe vs forget-a  (ideal: bottom-right)", fontsize=13)
-    fig.tight_layout(); save(fig, out, "fig_p10_oe_vs_forgeta"); plt.close(fig)
+    fig.tight_layout(rect=(0, 0.045, 1, 0.975)); save(fig, out, "fig_p10_oe_vs_forgeta"); plt.close(fig)
 
     print("saved 3 figures to", out)
 
