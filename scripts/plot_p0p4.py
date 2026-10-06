@@ -48,10 +48,12 @@ def ce(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--analysis", default="../product/results/_analysis")
+    ap.add_argument("--eval-root", default="../product/results/_analysis")
     ap.add_argument("--outdir", default="../references/think/figs")
     args = ap.parse_args()
     global SEARCH_DIRS
     A = Path(args.analysis)
+    E = Path(args.eval_root)
     O = Path(args.outdir)
     SEARCH_DIRS = [A, A / "p02_full"]
     O.mkdir(parents=True, exist_ok=True)
@@ -173,7 +175,56 @@ def main():
     ax[1].legend(fontsize=8); ax[1].grid(alpha=.3)
     fig.tight_layout(); save(fig, O, "fig_p4_dose"); plt.close(fig)
 
-    print("saved 5 figures to", O)
+    import glob as _glob
+
+    def erec(tag):
+        f = _glob.glob(str(E / f"p02_eval_{tag}" / f"{tag}_final_evaluation_results.json"))
+        if not f:
+            return None
+        s = json.load(open(f[0]))["Forget Set Results"]
+        return {
+            "fill": (s["fill_in_the_blank"]["image_textual_accuracy"], s["fill_in_the_blank"]["pure_text_accuracy"]),
+            "cls": (s["classification"]["Image-Textual Question Accuracy"], s["classification"]["Pure Text Question Accuracy"]),
+            "gen": (s["generation"]["Average ROUGE-L (Image_Textual)"], s["generation"]["Average ROUGE-L (Pure_Text)"]),
+        }
+
+    def bfrac(tag, ref, idx):
+        a, r, o = erec(tag), erec(ref), erec("origin")
+        if not (a and r and o):
+            return []
+        out = []
+        for task in ("fill", "cls", "gen"):
+            denom = r[task][idx] - o[task][idx]
+            if abs(denom) > 1e-9:
+                out.append((a[task][idx] - o[task][idx]) / denom)
+        return out
+
+    def mean(xs):
+        xs = [x for x in xs if x == x]
+        return sum(xs) / len(xs) if xs else float("nan")
+
+    tags5 = ["p0clip1.0", "p1bal", "merged_mm_um"]
+    names = ["joint (P0)", "grad-balance (P1)", "merged mm+um (P3)"]
+    mel = (C["1,1"]["it"]["mean"] - base_it) / (mm_it - base_it)
+    meu = (C["1,1"]["pt"]["mean"] - base_pt) / (um_pt - base_pt)
+    ce_frac = {"p0clip1.0": (p0f[0], p0f[1]), "p1bal": (p1f[0], p1f[1]), "merged_mm_um": (mel, meu)}
+    bmm = [mean(bfrac(t, "refmm", 0)) for t in tags5]
+    bum = [mean(bfrac(t, "refum", 1)) for t in tags5]
+    if all(v == v for v in bmm + bum):
+        fig, ax = plt.subplots(figsize=(8.8, 4.2))
+        x = np.arange(len(tags5)); w = 0.2
+        ax.bar(x - 1.5 * w, [ce_frac[t][0] for t in tags5], w, label="CE  mm (IT)", color="tab:blue")
+        ax.bar(x - 0.5 * w, [ce_frac[t][1] for t in tags5], w, label="CE  um (PT)", color="tab:red")
+        ax.bar(x + 0.5 * w, bmm, w, label="bench mm (Fill/Cls/Gen mean)", color="tab:cyan")
+        ax.bar(x + 1.5 * w, bum, w, label="bench um (Fill/Cls/Gen mean)", color="tab:orange")
+        ax.axhline(1.0, ls=":", color="gray")
+        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
+        ax.set_ylabel("effect fraction (of single-modality ref)")
+        ax.set_title("CE-level vs UMU-bench: joint loses mm; merged keeps BOTH")
+        ax.legend(fontsize=8, ncol=2); ax.grid(alpha=.3, axis="y")
+        fig.tight_layout(); save(fig, O, "fig_p5_ce_vs_bench")
+
+    print("saved figures to", O)
 
 
 if __name__ == "__main__":
