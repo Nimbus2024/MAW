@@ -1,289 +1,152 @@
 #!/usr/bin/env python3
-"""P1/P2 consistency visualization for the MAW ablation (per references/think/P0-P4).
+"""P1/P2 consistency visualization for the MAW ablation.
 
-P1: a-d plane (x=d=AllAcc, y=a=AllErr) with iso-oe lines, 3x2 (scope x task).
-P2: forget-retain / forget-real Pareto, 2x2 (task x pair), top-right = Pareto.
+Reuses the rendering of the reference `plot_consistency.py`
+(draw_ad / draw_pareto from plot_consistency, colors/save from plot_pareto),
+only swapping the data source for the ablation runs:
 
-a/d/oe are taken directly from the aggregate `All Modal Question Accuracy/Error`
-(= d/a) in `*final_evaluation_results.json`; oe = 100 - a - d.
+    a = AllErr = P(both wrong);  d = AllAcc = P(both right);  oe = 1-a-d
+    forget = Forget Set;  retain = Retain Set (shared);  real = Retain Set (real person)
+
+Run with the matplotlib env:  /home/jwzm/miniconda3/envs/d2l/bin/python
 """
+from __future__ import annotations
+
 import argparse
 import glob
 import json
-import os
-from PIL import Image, ImageDraw, ImageFont
+import sys
+from pathlib import Path
 
-FORGET = "Forget Set Results"
-RETAIN = "Retain Set (shared dataset) Results"
-REAL = "Retain Set (real person) Results"
-SCOPES = [("Forget", FORGET), ("Retain", RETAIN), ("Real", REAL)]
-TASKS = [("Fill", "fill_in_the_blank"), ("Cls", "classification")]
+import matplotlib
 
-FONT_DIRS = ["/usr/share/fonts/truetype/dejavu/", "/usr/share/fonts/dejavu/",
-             os.path.expanduser("~/.fonts/")]
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import plot_pareto as PP  # noqa: E402  (save)
+import plot_consistency as PC  # noqa: E402  (draw_ad, draw_pareto, TASKS, SETS)
 
-def _font(name, size):
-    for d in FONT_DIRS:
-        p = os.path.join(d, name)
-        if os.path.isfile(p):
-            return ImageFont.truetype(p, size)
-    return ImageFont.load_default()
+SETS = {"forget": "Forget Set Results",
+        "retain": "Retain Set (shared dataset) Results",
+        "real": "Retain Set (real person) Results"}
+TASKS = ("fill", "cls")
 
-
-F_TITLE = _font("DejaVuSans-Bold.ttf", 34)
-F_PANEL = _font("DejaVuSans-Bold.ttf", 24)
-F_LEG = _font("DejaVuSans.ttf", 22)
-F_TICK = _font("DejaVuSans.ttf", 18)
-F_AXIS = _font("DejaVuSans-Bold.ttf", 20)
-
-# tag, path glob, family, color, epoch (None=final), star?
+# tag, glob (under <root>/results), label, color, epoch (None=final), star?
 RUNS = [
-    ("origin", "ratio5/origin/20260906_204146", "origin", (218, 165, 32), 0, True),
-    ("oldMAW 170751", "ratio5/MAW/20260907_170751", "lambda1.5", (139, 0, 0), 6, False),
-    ("PhaseC a0.3", "ablation/MAW/*-emaRL_a0.3", "lambda1.5", (230, 90, 90), 6, False),
-    ("v1ema", "ablation/MAW/*-v1ema", "dyn", (31, 119, 180), 4, False),
-    ("v4it", "ablation/MAW/*-v4it", "iso", (44, 160, 44), 4, False),
-    ("v5pt", "ablation/MAW/*-v5pt", "iso", (255, 127, 14), 4, False),
-    ("v6a3", "ablation/MAW/*-v6a3", "alpha", (148, 103, 189), 4, False),
-    ("v8b04", "ablation/MAW/*-v8b04", "beta", (140, 86, 75), 4, False),
-    ("v9coeff1", "ablation/MAW/*-v9coeff1", "coeff", (227, 119, 194), 4, False),
-    ("v10dpo", "ablation/DPO/*-v10dpo", "loss", (23, 190, 207), 4, False),
-    ("v11npo", "ablation/NPO/*-v11npo", "loss", (170, 170, 30), 4, False),
+    ("origin", "ratio5/origin/20260906_204146", "origin", "#FFD700", 0, True),
+    ("oldMAW", "ratio5/MAW/20260907_170751", "oldMAW 170751 (l=1.5)", "#8B0000", 6, False),
+    ("phaseC", "ablation/MAW/*-emaRL_a0.3", "PhaseC a=0.3 (l=1.5)", "#E85A5A", 6, False),
+    ("v1ema", "ablation/MAW/*-v1ema", "v1ema (dyn EMA, l=0)", "#1f77b4", 4, False),
+    ("v4it", "ablation/MAW/*-v4it", "v4it (IT-only, l=0)", "#2ca02c", 4, False),
+    ("v5pt", "ablation/MAW/*-v5pt", "v5pt (PT-only, l=0)", "#ff7f0e", 4, False),
+    ("v6a3", "ablation/MAW/*-v6a3", "v6a3 (alpha=3, l=0)", "#9467bd", 4, False),
+    ("v8b04", "ablation/MAW/*-v8b04", "v8b04 (beta=.4, l=0)", "#8c564b", 4, False),
+    ("v9coeff1", "ablation/MAW/*-v9coeff1", "v9coeff1 (coeff=1, l=0)", "#e377c2", 4, False),
+    ("v10dpo", "ablation/DPO/*-v10dpo", "v10dpo (DPO, l=0)", "#17becf", 4, False),
+    ("v11npo", "ablation/NPO/*-v11npo", "v11npo (NPO, l=0)", "#bcbd22", 4, False),
 ]
 
 
 def _final_json(run_dir, epoch):
     if epoch:
         c = sorted(glob.glob(f"{run_dir}/runs/epoch-{epoch}/metrics/*final_evaluation_results.json"))
-        if not c:
-            c = sorted(glob.glob(f"{run_dir}/runs/epoch-*/metrics/*final_evaluation_results.json"))
-    else:
-        c = (sorted(glob.glob(f"{run_dir}/runs/epoch-*/metrics/*final_evaluation_results.json"))
-             or sorted(glob.glob(f"{run_dir}/metrics/*final_evaluation_results.json")))
+        if c:
+            return c[-1]
+    c = (sorted(glob.glob(f"{run_dir}/runs/epoch-*/metrics/*final_evaluation_results.json"))
+         or sorted(glob.glob(f"{run_dir}/metrics/*final_evaluation_results.json")))
     return c[-1] if c else None
 
 
-def load_runs(root):
-    out = []
-    for tag, pat, family, color, epoch, star in RUNS:
-        dirs = sorted(glob.glob(os.path.join(root, "results", pat)))
-        if not dirs:
-            print(f"  ! missing {tag} ({pat})")
-            continue
-        fj = _final_json(dirs[0], epoch)
-        if not fj:
-            print(f"  ! no final json {tag}")
-            continue
-        m = json.load(open(fj))
-        data = {}
-        for sname, skey in SCOPES:
-            for tname, tkey in TASKS:
-                try:
-                    a = m[skey][tkey]["All Modal Question Error"]
-                    d = m[skey][tkey]["All Modal Question Accuracy"]
-                except KeyError:
-                    continue
-                data[(sname, tname)] = dict(a=a, d=d, oe=100.0 - a - d, ep=epoch or "final")
-        ep = epoch or "final"
-        out.append(dict(tag=tag, family=family, color=color, star=star, ep=ep, data=data))
+def load(root, tag):
+    entry = next(r for r in RUNS if r[0] == tag)
+    dirs = sorted(glob.glob(str(Path(root) / "results" / entry[1])))
+    if not dirs:
+        return None
+    fj = _final_json(dirs[0], entry[4])
+    if not fj:
+        return None
+    m = json.load(open(fj))
+    out = {}
+    for scope, skey in SETS.items():
+        for task in TASKS:
+            tkey = "fill_in_the_blank" if task == "fill" else "classification"
+            b = m[skey][tkey]
+            d = b["All Modal Question Accuracy"] / 100
+            a = b["All Modal Question Error"] / 100
+            out[(scope, task)] = {"a": a, "d": d, "oe": 1 - a - d}
     return out
-
-
-def _m(panel, x0, y0, w, h, xmin=0, xmax=100, ymin=0, ymax=100):
-    return lambda x, y: (x0 + w * (x - xmin) / (xmax - xmin), y0 + h - h * (y - ymin) / (ymax - ymin))
-
-
-def draw_axes(draw, x0, y0, w, h, title, xlabel, ylabel):
-    draw.rectangle([x0, y0, x0 + w, y0 + h], fill=(255, 255, 255), outline=(90, 90, 90), width=2)
-    draw.text((x0, y0 - 34), title, fill=(0, 0, 0), font=F_PANEL)
-    P = _m(None, x0, y0, w, h)
-    for v in range(0, 101, 20):
-        xx, _ = P(v, 0)
-        draw.line([xx, y0, xx, y0 + h], fill=(238, 238, 238))
-        draw.text((xx - 12, y0 + h + 6), str(v), fill=(90, 90, 90), font=F_TICK)
-        _, yy = P(0, v)
-        draw.line([x0, yy, x0 + w, yy], fill=(238, 238, 238))
-        draw.text((x0 - 42, yy - 10), str(v), fill=(90, 90, 90), font=F_TICK)
-    draw.text((x0 + w / 2 - 30, y0 + h + 34), xlabel, fill=(60, 60, 60), font=F_AXIS)
-    draw.text((x0 - 40, y0 - 6), ylabel, fill=(60, 60, 60), font=F_AXIS)
-
-
-def dot(draw, cx, cy, color, star=False, r=8):
-    if star:
-        import math
-        pts = []
-        for i in range(10):
-            ang = -math.pi / 2 + i * math.pi / 5
-            rad = r + 7 if i % 2 == 0 else (r + 7) * 0.45
-            pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
-        draw.polygon(pts, fill=color, outline=(80, 60, 0))
-    else:
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline=(255, 255, 255), width=2)
-
-
-def render_p1(runs, outdir):
-    pw, ph = 560, 470
-    cols, rows = 2, 3
-    W, H = 60 + cols * (pw + 70), 260 + rows * (ph + 90)
-    img = Image.new("RGB", (W, H), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    draw.text((40, 24), "P1 (ablation): a-d plane with iso-oe lines  (x=d=AllAcc, y=a=AllErr)",
-              fill=(0, 0, 0), font=F_TITLE)
-    draw.text((40, 72), "Forget: better up-left (a up) | Retain/Real: better right-down (d up) | same d: higher a = lower oe",
-              fill=(70, 70, 70), font=F_LEG)
-    # legend
-    lx, ly = 40, 120
-    for r in runs:
-        draw.line([lx, ly + 9, lx + 30, ly + 9], fill=r["color"], width=6)
-        if r["star"]:
-            dot(draw, lx + 14, ly + 9, r["color"], star=True, r=6)
-        lbl = f"{r['tag']}"
-        draw.text((lx + 38, ly), lbl, fill=(0, 0, 0), font=F_LEG)
-        lx += 52 + int(draw.textlength(lbl, font=F_LEG))
-        if lx > W - 260:
-            lx, ly = 40, ly + 32
-    for ri, (sname, skey) in enumerate(SCOPES):
-        for ci, (tname, tkey) in enumerate(TASKS):
-            x0 = 60 + ci * (pw + 70)
-            y0 = 220 + ri * (ph + 90)
-            draw_axes(draw, x0, y0, pw, ph, f"{sname} / {tname}", "d = AllAcc (both right)",
-                      "a = AllErr (both wrong)")
-            P = _m(None, x0, y0, pw, ph)
-            oes = [r["data"][(sname, tname)]["oe"] for r in runs if (sname, tname) in r["data"]]
-            if oes:
-                lo, hi = max(0, int(min(oes)) - 4), min(100, int(max(oes)) + 4)
-                for oe in range(lo, hi + 1, 5):
-                    c = 100 - oe
-                    if c <= 100:
-                        p1, p2 = P(max(0, c - 100), min(100, c)), P(min(100, c), max(0, c - 100))
-                    else:
-                        p1, p2 = P(c - 100, 100), P(100, c - 100)
-                    draw.line([p1, p2], fill=(226, 226, 226), width=1)
-                    lx2, ly2 = P(c * 0.5, c * 0.5)
-                    draw.text((lx2 + 4, ly2 + 2), f"oe={oe}", fill=(170, 170, 170), font=F_TICK)
-            # oe = 0 boundary
-            p1, p2 = P(0, 100), P(100, 0)
-            draw.line([p1, p2], fill=(120, 120, 120), width=2)
-            for r in runs:
-                v = r["data"].get((sname, tname))
-                if not v:
-                    continue
-                cx, cy = P(v["d"], v["a"])
-                if r["star"]:
-                    # bold iso-oe line for origin
-                    c = v["a"] + v["d"]
-                    if c <= 100:
-                        q1, q2 = P(max(0, c - 100), min(100, c)), P(min(100, c), max(0, c - 100))
-                    else:
-                        q1, q2 = P(c - 100, 100), P(100, c - 100)
-                    draw.line([q1, q2], fill=r["color"], width=2)
-                dot(draw, cx, cy, r["color"], star=r["star"])
-    path = os.path.join(outdir, "fig_p11_isooe_ablation.png")
-    img.save(path)
-    return path
-
-
-def _pareto(pts):
-    fr = []
-    for p in pts:
-        if not any(q[0] >= p[0] and q[1] >= p[1] and (q[0] > p[0] or q[1] > p[1]) for q in pts if q is not p):
-            fr.append(p)
-    return sorted(fr, key=lambda t: t[0])
-
-
-def render_p2(runs, outdir):
-    pw, ph = 560, 470
-    cols, rows = 2, 2
-    W, H = 60 + cols * (pw + 70), 260 + rows * (ph + 90)
-    img = Image.new("RGB", (W, H), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    draw.text((40, 24), "P2 (ablation): forget-retain / forget-real Pareto  (top-right = Pareto)",
-              fill=(0, 0, 0), font=F_TITLE)
-    draw.text((40, 72), "y = a_forget (both wrong, up better) | x = d (both right, right better) | red dashed = non-dominated frontier",
-              fill=(70, 70, 70), font=F_LEG)
-    lx, ly = 40, 120
-    for r in runs:
-        draw.line([lx, ly + 9, lx + 30, ly + 9], fill=r["color"], width=6)
-        if r["star"]:
-            dot(draw, lx + 14, ly + 9, r["color"], star=True, r=6)
-        lbl = r["tag"]
-        draw.text((lx + 38, ly), lbl, fill=(0, 0, 0), font=F_LEG)
-        lx += 52 + int(draw.textlength(lbl, font=F_LEG))
-        if lx > W - 260:
-            lx, ly = 40, ly + 32
-    pairs = [("f-ret", "Retain"), ("f-real", "Real")]
-    for ri, (tname, tkey) in enumerate(TASKS):
-        for ci, (pname, other) in enumerate(pairs):
-            x0 = 60 + ci * (pw + 70)
-            y0 = 220 + ri * (ph + 90)
-            draw_axes(draw, x0, y0, pw, ph, f"{tname}: a_forget vs d_{other}",
-                      f"d_{other} = AllAcc (both right)", "a_forget = AllErr (both wrong)")
-            P = _m(None, x0, y0, pw, ph)
-            pts = []
-            for r in runs:
-                vf = r["data"].get(("Forget", tname))
-                vo = r["data"].get((other, tname))
-                if not vf or not vo:
-                    continue
-                pts.append((vo["d"], vf["a"], r))
-            # pareto frontier (larger x, larger y better)
-            fr = _pareto([(p[0], p[1]) for p in pts])
-            if len(fr) >= 2:
-                for k in range(len(fr) - 1):
-                    a1, a2 = P(*fr[k]), P(*fr[k + 1])
-                    _dashed(draw, a1, a2, (214, 39, 40), 2)
-                # extend to axes
-                _dashed(draw, P(0, fr[0][1]), P(*fr[0]), (214, 39, 40), 2)
-                _dashed(draw, P(*fr[-1]), P(fr[-1][0], 0), (214, 39, 40), 2)
-            for x, y, r in pts:
-                if r["star"]:
-                    _dashed(draw, P(x, 0), P(x, y), r["color"], 1)
-                    _dashed(draw, P(0, y), P(x, y), r["color"], 1)
-                cx, cy = P(x, y)
-                dot(draw, cx, cy, r["color"], star=r["star"])
-    path = os.path.join(outdir, "fig_p12_pareto_ablation.png")
-    img.save(path)
-    return path
-
-
-def _dashed(draw, p1, p2, color, width, dash=8, gap=6):
-    import math
-    x1, y1 = p1
-    x2, y2 = p2
-    d = math.hypot(x2 - x1, y2 - y1)
-    if d == 0:
-        return
-    n = int(d // (dash + gap)) + 1
-    for i in range(n):
-        t0 = i * (dash + gap) / d
-        t1 = min((i * (dash + gap) + dash) / d, 1.0)
-        draw.line([(x1 + (x2 - x1) * t0, y1 + (y2 - y1) * t0),
-                   (x1 + (x2 - x1) * t1, y1 + (y2 - y1) * t1)], fill=color, width=width)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="../product")
     ap.add_argument("--outdir", default=None)
-    a = ap.parse_args()
-    runs = load_runs(a.root)
-    outdir = a.outdir or os.path.join(a.root, "record", "ablations", "groups")
-    os.makedirs(outdir, exist_ok=True)
-    print("runs:", [r["tag"] for r in runs])
-    print("written", render_p1(runs, outdir))
-    print("written", render_p2(runs, outdir))
-    # print table
-    print("\nrun                  | forget a/d/oe (fill,cls) | retain a/d/oe | real a/d/oe")
-    for r in runs:
-        cells = []
-        for sname, _ in SCOPES:
-            vals = []
-            for tname, _ in TASKS:
-                v = r["data"].get((sname, tname))
-                vals.append("--" if not v else f"{v['a']:.0f}/{v['d']:.0f}/{v['oe']:.0f}")
-            cells.append(",".join(vals))
-        print(f"{r['tag']:20s} | " + " | ".join(cells))
+    ap.add_argument("--xpad", type=float, default=6.0)
+    ap.add_argument("--ypad", type=float, default=3.0)
+    ap.add_argument("--step", type=int, default=10)
+    args = ap.parse_args()
+    root = Path(args.root)
+    out = Path(args.outdir) if args.outdir else root / "record" / "ablations" / "groups"
+    out.mkdir(parents=True, exist_ok=True)
+
+    # feed the ablation palette/labels into the reference draw functions
+    PC.COLORS = {r[0]: r[3] for r in RUNS}
+    PC.LABELS = {r[0]: r[2] for r in RUNS}
+    PP.COLORS = PC.COLORS
+    PP.LABELS = PC.LABELS
+
+    D = {r[0]: load(root, r[0]) for r in RUNS}
+    D = {t: v for t, v in D.items() if v}
+    tags = list(D)
+    print("models:", tags)
+    for t in tags:
+        v = D[t]
+        print(f"{t:10s} | " + " | ".join(
+            f"{s}-{k} {100*v[(s,k)]['a']:.0f}/{100*v[(s,k)]['d']:.0f}/{100*v[(s,k)]['oe']:.0f}"
+            for s in ("forget", "retain", "real") for k in TASKS))
+
+    # ---- fig_p11: 3x2 iso-oe grid -------------------------------------------
+    rows = [("forget", "better: a up / oe down"),
+            ("retain", "better: d up / oe down"),
+            ("real", "better: d up / oe down")]
+    fig, axes = plt.subplots(3, 2, figsize=(12.5, 15))
+    h = l = None
+    for r, (scope, good) in enumerate(rows):
+        for c, task in enumerate(TASKS):
+            pts = [(100 * D[t][(scope, task)]["d"], 100 * D[t][(scope, task)]["a"], t) for t in tags]
+            h, l = PC.draw_ad(axes[r, c], pts, scope, task, good, args.xpad, args.ypad, args.step)
+    fig.legend(h, l, loc="lower center", ncol=6, fontsize=9, frameon=False)
+    fig.suptitle("MAW ablation consistency/efficiency: a-d plane with iso-oe lines (a+d+oe=100). "
+                 "At same d, higher a = lower oe.\n"
+                 "forget = forget set; retain = shared; real = real person.  "
+                 "gold star = origin; reds = lambda=1.5 controls; others = lambda=0 families",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.965))
+    PP.save(fig, out, "fig_p11_isooe_ablation")
+    plt.close(fig)
+
+    # ---- fig_p12: 2x2 Pareto grid -------------------------------------------
+    cols = [("retain", "retain(shared)-d"), ("real", "real-d")]
+    fig, axes = plt.subplots(2, 2, figsize=(13, 11))
+    h = l = None
+    for r, task in enumerate(TASKS):
+        for c, (scope, ylab) in enumerate(cols):
+            pts = [(100 * D[t][("forget", task)]["a"], 100 * D[t][(scope, task)]["d"], t) for t in tags]
+            h, l = PC.draw_pareto(axes[r, c], pts,
+                                  f"forget-{task} a = AllErr (higher = both forgotten)",
+                                  f"{ylab} (higher = kept)",
+                                  f"{task}: forget-a  x  {scope}-d")
+    fig.legend(h, l, loc="lower center", ncol=6, fontsize=9, frameon=False)
+    fig.suptitle("MAW ablation forget-retain / forget-real Pareto (upper-right = Pareto; "
+                 "gold star = origin, gold dotted = origin reference)\n"
+                 "higher forget-a is better; higher retain/real-d is better",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.96))
+    PP.save(fig, out, "fig_p12_pareto_ablation")
+    plt.close(fig)
+
+    print("saved to", out)
 
 
 if __name__ == "__main__":
