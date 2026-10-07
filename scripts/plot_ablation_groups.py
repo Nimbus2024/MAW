@@ -24,6 +24,11 @@ FAMILIES = {
                  ["v6a05", "v1ema", "v6a15", "v6a3"]),
     "G5_coeff": ("DPO 是否除以 β（系数 inv_beta vs one）",
                  ["v3fix05", "v9coeff1", "v1ema", "v10dpo"]),
+    "G10_retain_alpha": ("含 retain loss：水平EMA 的 α 扫描（ρ=0）",
+                         ["emaRL_a0.3", "emaRL_a0.5", "emaRL_a1.0", "emaRL_a2.0", "emaRL_a3.0"]),
+    "G11_retain_rho": ("含 retain loss：α=0.3 的 ρ 扫描（ρ=0 即纯 gap）",
+                       ["emaRL_a0.3", "emaRLr_a0.3_r0.1", "emaRLr_a0.3_r0.3",
+                        "emaRLr_a0.3_r0.7", "emaRLr_a0.3_r0.9"]),
     "G6_level_vs_baseline": ("水平EMA(ema_level) vs 残差EMA vs 固定 vs DPO",
                              ["v1ema", "v3fix05", "v10dpo", "emaB_r05_a1.0"]),
     "G7_level_rho": ("水平EMA 的 ρ 扫描（α=1）",
@@ -56,7 +61,16 @@ def load_runs(root):
                 epochs[ep] = G.parse_final(os.path.dirname(js[0]))
         txt = open(log, encoding="utf-8", errors="ignore").read()
         gam = [float(x) for x in re.findall(r"gamma=([0-9.]+)", txt)]
-        runs[tag] = {"cfg": cfg, "epochs": epochs, "gamma": gam}
+        n_ep = len(epochs) or 1
+        gamma_epoch = {}
+        if gam:
+            for i in range(n_ep):
+                lo = int(i * len(gam) / n_ep)
+                hi = int((i + 1) * len(gam) / n_ep)
+                chunk = gam[lo:hi]
+                if chunk:
+                    gamma_epoch[i + 1] = sum(chunk) / len(chunk)
+        runs[tag] = {"cfg": cfg, "epochs": epochs, "gamma": gam, "gamma_epoch": gamma_epoch}
     return runs
 
 

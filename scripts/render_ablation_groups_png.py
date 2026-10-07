@@ -23,6 +23,8 @@ EN_TITLES = {
     "G3_beta": "G3  beta (0.1 -> 0.8)",
     "G4_alpha": "G4  alpha (0.5 -> 3)",
     "G5_coeff": "G5  coefficient: inv_beta vs one (DPO)",
+    "G10_retain_alpha": "G10  with retain loss: level-EMA alpha sweep (rho=0)",
+    "G11_retain_rho": "G11  with retain loss: rho sweep (alpha=0.3)",
     "G6_level_vs_baseline": "G6  level-EMA vs residual-EMA vs fixed vs DPO",
     "G7_level_rho": "G7  level-EMA rho sweep (alpha=1)",
     "G8_level_alpha": "G8  level-EMA alpha sweep (rho=0.5)",
@@ -30,65 +32,74 @@ EN_TITLES = {
 }
 PANELS = [
     ("Forget Fill (All)  lower = more forgotten",
-     lambda d: P.series_metric(d, "Forget", "Fill")),
+     lambda run, eps: [P.series_metric(run["epochs"][e], "Forget", "Fill") if e in run["epochs"] else None for e in eps]),
     ("Retain Fill (All)  higher = better kept",
-     lambda d: P.series_metric(d, "Retain", "Fill")),
+     lambda run, eps: [P.series_metric(run["epochs"][e], "Retain", "Fill") if e in run["epochs"] else None for e in eps]),
+    ("Real Fill (All)  higher = better",
+     lambda run, eps: [P.series_metric(run["epochs"][e], "Real", "Fill") if e in run["epochs"] else None for e in eps]),
     ("Forget Fill IT - PT  (positive = IT less forgotten)",
-     lambda d: (P.series_metric(d, "Forget", "Fill", "IT")
-                - P.series_metric(d, "Forget", "Fill", "PT"))
-               if P.series_metric(d, "Forget", "Fill", "IT") is not None
-               and P.series_metric(d, "Forget", "Fill", "PT") is not None else None),
+     lambda run, eps: [(P.series_metric(run["epochs"][e], "Forget", "Fill", "IT")
+                        - P.series_metric(run["epochs"][e], "Forget", "Fill", "PT"))
+                       if e in run["epochs"] else None for e in eps]),
     ("Retain Fill IT - PT  (positive = IT better kept)",
-     lambda d: (P.series_metric(d, "Retain", "Fill", "IT")
-                - P.series_metric(d, "Retain", "Fill", "PT"))
-               if P.series_metric(d, "Retain", "Fill", "IT") is not None
-               and P.series_metric(d, "Retain", "Fill", "PT") is not None else None),
+     lambda run, eps: [(P.series_metric(run["epochs"][e], "Retain", "Fill", "IT")
+                        - P.series_metric(run["epochs"][e], "Retain", "Fill", "PT"))
+                       if e in run["epochs"] else None for e in eps]),
+    ("gamma vs step  (gray = 0.5)",
+     "gamma"),
 ]
 
 
-def draw_panel(draw, x0, y0, w, h, title, series, color_of):
+def draw_panel(draw, x0, y0, w, h, title, series, color_of, xlabel="epoch", refline=None):
     draw.rectangle([x0, y0, x0 + w, y0 + h], fill=(255, 255, 255), outline=(120, 120, 120), width=2)
     draw.text((x0, y0 - 30), title, fill=(0, 0, 0), font=F_PANEL)
-    vals = [v for _, ys in series for v in ys if v is not None]
+    norm = []
+    for item in series:
+        tag = item[0]
+        if len(item) == 3:
+            norm.append((tag, item[1], item[2]))
+        else:
+            ys = item[1]
+            norm.append((tag, list(range(1, len(ys) + 1)), ys))
+    vals = [v for _, _, ys in norm for v in ys if v is not None]
     if not vals:
         return
+    xmin = min(xs[0] for _, xs, _ in norm if xs)
+    xmax = max(xs[-1] for _, xs, _ in norm if xs)
     vmin, vmax = min(vals), max(vals)
-    pad = (vmax - vmin) * 0.15 or 1.0
+    pad = (vmax - vmin) * 0.12 or 1.0
     vmin -= pad
     vmax += pad
-    n = max((len(ys) for _, ys in series), default=1)
     for k in range(5):
         yv = vmin + (vmax - vmin) * k / 4
         yy = y0 + h - h * k / 4
         draw.line([x0, yy, x0 + w, yy], fill=(235, 235, 235))
         draw.text((x0 - 78, yy - 10), f"{yv:.2f}", fill=(90, 90, 90), font=F_TICK)
-    for i in range(n):
-        xx = x0 + w * i / max(n - 1, 1)
-        draw.line([xx, y0, xx, y0 + h], fill=(245, 245, 245))
-        draw.text((xx - 5, y0 + h + 8), str(i + 1), fill=(90, 90, 90), font=F_TICK)
-    draw.text((x0 + w / 2 - 22, y0 + h + 30), "epoch", fill=(60, 60, 60), font=F_AXIS)
-    for tag, ys in series:
+    if refline is not None and vmin <= refline <= vmax:
+        yr = y0 + h - h * (refline - vmin) / (vmax - vmin)
+        for xx in range(int(x0), int(x0 + w), 22):
+            draw.line([xx, yr, xx + 11, yr], fill=(160, 160, 160), width=2)
+        draw.text((x0 + w - 58, yr - 26), f"{refline:g}", fill=(120, 120, 120), font=F_TICK)
+    for k in range(6):
+        xv = xmin + (xmax - xmin) * k / 5
+        xx = x0 + w * k / 5
+        draw.text((xx - 10, y0 + h + 8), f"{int(xv)}", fill=(90, 90, 90), font=F_TICK)
+    draw.text((x0 + w / 2 - 18, y0 + h + 32), xlabel, fill=(60, 60, 60), font=F_AXIS)
+    for tag, xs, ys in norm:
         col = color_of(tag)
-        pts = []
-        for i, v in enumerate(ys):
-            if v is None:
-                continue
-            xx = x0 + w * i / max(n - 1, 1)
-            yy = y0 + h - h * (v - vmin) / (vmax - vmin)
-            pts.append((xx, yy))
+        pts = [(x0 + w * (x - xmin) / max(xmax - xmin, 1), y0 + h - h * (v - vmin) / (vmax - vmin))
+               for x, v in zip(xs, ys) if v is not None]
         if len(pts) >= 2:
-            draw.line(pts, fill=col, width=4)
-        for pt in pts:
-            draw.ellipse([pt[0] - 5, pt[1] - 5, pt[0] + 5, pt[1] + 5], fill=col, outline=(255, 255, 255))
-        if pts:
-            lx, ly = pts[-1]
-            draw.text((lx + 8, ly - 10), f"{ys[-1]:.1f}", fill=col, font=F_TICK)
+            draw.line(pts, fill=col, width=3)
+        lastv = next((v for v in reversed(ys) if v is not None), None)
+        if pts and lastv is not None:
+            draw.text((pts[-1][0] + 6, pts[-1][1] - 10), f"{lastv:.1f}", fill=col, font=F_TICK)
 
 
 def render_family(name, title, tags, runs, outdir):
     color_of = lambda tag: P.COLORS[tags.index(tag) % len(P.COLORS)]
     present = [t for t in tags if t in runs]
-    img = Image.new("RGB", (1960, 1560), (255, 255, 255))
+    img = Image.new("RGB", (1960, 360 + 3 * 530), (255, 255, 255))
     draw = ImageDraw.Draw(img)
     draw.text((30, 22), EN_TITLES.get(name, title), fill=(0, 0, 0), font=F_TITLE)
     lx, ly = 30, 78
@@ -99,15 +110,24 @@ def render_family(name, title, tags, runs, outdir):
         if lx > 1500:
             lx, ly = 30, ly + 34
     y_base = ly + 50
-    positions = [(110, y_base), (1010, y_base), (110, y_base + 660), (1010, y_base + 660)]
-    for (label, fn), (x0, y0) in zip(PANELS, positions):
+    ep_all = sorted(set().union(*[set(runs[t]["epochs"]) for t in present]))
+    for i, (label, kind) in enumerate(PANELS):
+        x0 = 110 + (i % 2) * 900
+        y0 = y_base + (i // 2) * 530
         series = []
+        if kind == "gamma":
+            for tag in present:
+                gam = runs[tag]["gamma"]
+                steps = runs[tag]["cfg"].get("max_steps") or max(len(gam) // 2, 1)
+                xs = [round(j * (steps - 1) / max(len(gam) - 1, 1)) + 1 for j in range(len(gam))]
+                series.append((tag, xs, gam))
+            draw_panel(draw, x0, y0, 820, 460, label, series, color_of, xlabel="step", refline=0.5)
+            continue
         for tag in present:
-            eps = runs[tag]["epochs"]
-            ys = [fn(eps[e]) if e in eps else None for e in sorted(eps)]
+            ys = kind(runs[tag], ep_all)
             if any(v is not None for v in ys):
                 series.append((tag, ys))
-        draw_panel(draw, x0, y0, 820, 500, label, series, color_of)
+        draw_panel(draw, x0, y0, 820, 460, label, series, color_of, xlabel="epoch")
     path = os.path.join(outdir, f"{name}.png")
     img.save(path)
     return path
