@@ -40,19 +40,24 @@ def save(fig, outdir, name):
 def fig_cka_layers(root, out):
     d = json.load(open(find(root, "cka_layers.json")))
     layers, n = d["layers"], d["n"]
-    fig, ax = plt.subplots(figsize=(7.6, 4.6))
-    for m in MODELS:
-        y = [d["models"][m][str(L)]["cka_it_pt"] for L in layers]
-        ax.plot(layers, y, "o-", color=MODEL_COLORS[m], lw=1.8, ms=5, label=m)
-    ax.set_xticks(layers)
-    ax.set_xlim(-1, 32)
-    ax.set_ylim(0, None)
-    ax.set_xlabel("layer index")
-    ax.set_ylabel("CKA(IT, PT)")
-    ax.set_title(f"per-layer cross-modal representation CKA  (n={n}, forget_5)")
-    ax.legend(frameon=False)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
+    fig, axes = plt.subplots(1, 2, figsize=(12.6, 4.6))
+    for metric, ax, ylab in (("cka_it_pt", axes[0], "CKA(IT, PT)"),
+                             ("cos_it_pt", axes[1], r"$\cos$(IT, PT)")):
+        for m in MODELS:
+            y = [d["models"][m][str(L)][metric] for L in layers]
+            ax.plot(layers, y, "o-", color=MODEL_COLORS[m], lw=1.6, ms=3.2, label=m)
+        ax.set_xlabel("layer index")
+        ax.set_ylabel(ylab)
+        ax.set_xticks(range(0, len(layers), 4))
+        ax.set_xlim(-1, len(layers))
+        ax.set_ylim(0, None)
+        ax.grid(alpha=0.3)
+        ax.legend(frameon=False, fontsize=8)
+    axes[0].set_title(f"linear-kernel CKA  (n={n}, forget_5)")
+    axes[1].set_title("mean-pooled representation cosine")
+    fig.suptitle("IT vs PT representations per layer  "
+                 "(0 = embeddings, 1..32 = LM layers; low = near-orthogonal)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     save(fig, out, "fig_repr_cka_layers")
     plt.close(fig)
 
