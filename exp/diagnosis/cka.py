@@ -72,7 +72,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    layers = [int(x) for x in args.layers.split(",")]
+    layers_arg = args.layers.strip()
     processor = AutoProcessor.from_pretrained(args.base, local_files_only=True)
     processor.num_additional_image_tokens = 1
     base = LlavaForConditionalGeneration.from_pretrained(
@@ -80,6 +80,18 @@ def main():
         local_files_only=True).to(args.device).eval()
     base.config.use_cache = False
     pairs = probe_pairs(args.data_split_dir, args.forget_split, args.n, args.seed)
+    if layers_arg.lower() == "all":
+        probe = [{"image": pairs[0]["image"], "question": pairs[0]["mm_q"],
+                  "answer": pairs[0]["mm_a"]}]
+        ids, attn, pixel, _ = batch_to_device(
+            build_batch(probe, "mm", processor, args.max_length), "mm", args.device)
+        with torch.no_grad():
+            hs = base(input_ids=ids, attention_mask=attn, pixel_values=pixel,
+                      output_hidden_states=True, use_cache=False).hidden_states
+        layers = list(range(len(hs)))
+    else:
+        layers = [int(x) for x in layers_arg.split(",")]
+    print(f"layers: {layers[0]}..{layers[-1]} ({len(layers)})", flush=True)
 
     reps_all = {"base": {m: reps(base, pairs, m, layers, args.device, processor, args.max_length, args.batch_size)
                          for m in ("mm", "um")}}
@@ -103,6 +115,7 @@ def main():
         for L in layers:
             it, pt = per_mod["mm"][L], per_mod["um"][L]
             e = {"cka_it_pt": cka(it, pt),
+                 "cos_it_pt": float(torch.nn.functional.cosine_similarity(it, pt, dim=1).mean()),
                  "norm_it": float(it.norm(dim=1).mean()),
                  "norm_pt": float(pt.norm(dim=1).mean())}
             if name != "base":
