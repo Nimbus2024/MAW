@@ -32,6 +32,30 @@ def cka(x: torch.Tensor, y: torch.Tensor) -> float:
     return float(hsic / denom) if denom > 0 else float("nan")
 
 
+def cos_diag(a, b):
+    return float(torch.nn.functional.cosine_similarity(a, b, dim=1).mean())
+
+
+def cos_allpairs(a):
+    z = torch.nn.functional.normalize(a.float(), dim=1)
+    s = z @ z.T
+    n = a.shape[0]
+    return float((s.sum() - s.diag().sum()) / (n * (n - 1)))
+
+
+def cos_cross_off(a, b):
+    za = torch.nn.functional.normalize(a.float(), dim=1)
+    zb = torch.nn.functional.normalize(b.float(), dim=1)
+    s = za @ zb.T
+    n = a.shape[0]
+    return float((s.sum() - s.diag().sum()) / (n * (n - 1)))
+
+
+def cka_half(a, b):
+    h = a.shape[0] // 2
+    return cka(a[:h], b[h:2 * h])
+
+
 def probe_pairs(data_split_dir, split, n, seed=42):
     ps = build_pairs(pd.read_parquet(Path(data_split_dir) / split / "train-00000-of-00001.parquet"))
     order = torch.randperm(len(ps), generator=torch.Generator().manual_seed(seed)).tolist()
@@ -39,7 +63,7 @@ def probe_pairs(data_split_dir, split, n, seed=42):
 
 
 @torch.no_grad()
-def reps(model, pairs, modality, layers, device, processor, max_length, batch_size=4):
+def reps(model, pairs, modality, layers, device, processor, max_length, batch_size=4, pool="mean"):
     out = {L: [] for L in layers}
     for b in range(0, len(pairs), batch_size):
         chunk = pairs[b:b + batch_size]
@@ -51,9 +75,16 @@ def reps(model, pairs, modality, layers, device, processor, max_length, batch_si
         o = model(input_ids=ids, attention_mask=attn, pixel_values=pixel,
                   output_hidden_states=True, use_cache=False)
         mask = attn.unsqueeze(-1).float()
+        amask = (labels != -100).unsqueeze(-1).float()
+        wmask = amask if (pool == "answer" and amask.sum() > 0) else mask
+        pos = (mask.sum(1).long() - 1).clamp_min(0)
+        rows = torch.arange(mask.shape[0], device=mask.device)
         for L in layers:
             h = o.hidden_states[L].float()
-            out[L].append(((h * mask).sum(1) / mask.sum(1).clamp_min(1)).cpu())
+            if pool == "last":
+                out[L].append(h[rows, pos].cpu())
+            else:
+                out[L].append(((h * wmask).sum(1) / wmask.sum(1).clamp_min(1)).cpu())
     return {L: torch.cat(v, 0) for L, v in out.items()}
 
 
@@ -70,6 +101,7 @@ def main():
     parser.add_argument("--forget_split", default="forget_5")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--pool", choices=["mean", "last", "answer"], default="mean")
     args = parser.parse_args()
 
     layers_arg = args.layers.strip()
@@ -93,7 +125,8 @@ def main():
         layers = [int(x) for x in layers_arg.split(",")]
     print(f"layers: {layers[0]}..{layers[-1]} ({len(layers)})", flush=True)
 
-    reps_all = {"base": {m: reps(base, pairs, m, layers, args.device, processor, args.max_length, args.batch_size)
+    reps_all = {"base": {m: reps(base, pairs, m, layers, args.device, processor,
+                                 args.max_length, args.batch_size, args.pool)
                          for m in ("mm", "um")}}
     print("base reps done", flush=True)
 
@@ -105,17 +138,24 @@ def main():
             if name != adapter_list[0][0]:
                 peft.load_adapter(path, adapter_name=name)
             peft.set_adapter(name)
-            reps_all[name] = {m: reps(peft, pairs, m, layers, args.device, processor, args.max_length, args.batch_size)
+            reps_all[name] = {m: reps(peft, pairs, m, layers, args.device, processor,
+                                      args.max_length, args.batch_size, args.pool)
                               for m in ("mm", "um")}
             print(f"{name} reps done", flush=True)
 
-    result = {"layers": layers, "n": len(pairs), "models": {}}
+    result = {"layers": layers, "n": len(pairs), "pool": args.pool, "models": {}}
     for name, per_mod in reps_all.items():
         entry = {}
         for L in layers:
             it, pt = per_mod["mm"][L], per_mod["um"][L]
             e = {"cka_it_pt": cka(it, pt),
-                 "cos_it_pt": float(torch.nn.functional.cosine_similarity(it, pt, dim=1).mean()),
+                 "cos_it_pt": cos_diag(it, pt),
+                 "cos_it_it": cos_allpairs(it),
+                 "cos_pt_pt": cos_allpairs(pt),
+                 "cos_it_pt_x": cos_cross_off(it, pt),
+                 "cka_it_it": cka_half(it, it),
+                 "cka_pt_pt": cka_half(pt, pt),
+                 "cka_it_pt_x": cka_half(it, pt),
                  "norm_it": float(it.norm(dim=1).mean()),
                  "norm_pt": float(pt.norm(dim=1).mean())}
             if name != "base":
@@ -132,15 +172,11 @@ def main():
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("layer | base CKA(IT,PT) norm(IT,PT) | joint CKA(IT,PT) vsbase(IT,PT) cos(IT,PT) normratio(IT,PT)")
+    print("layer | base cos: same-q(IT,PT) / diff-q(IT,PT) / IT-IT | CKA: same-q / diff-q")
     for L in layers:
         b = result["models"]["base"][str(L)]
-        j = result["models"].get("joint", {}).get(str(L), {})
-        print(f"{L:>5} | {b['cka_it_pt']:.3f} n=({b['norm_it']:.0f},{b['norm_pt']:.0f}) | "
-              f"{j.get('cka_it_pt', float('nan')):.3f} "
-              f"({j.get('cka_it_base', float('nan')):.3f},{j.get('cka_pt_base', float('nan')):.3f}) "
-              f"cos({j.get('cos_it_base', float('nan')):.3f},{j.get('cos_pt_base', float('nan')):.3f}) "
-              f"nr({j.get('norm_ratio_it', float('nan')):.3f},{j.get('norm_ratio_pt', float('nan')):.3f})")
+        print(f"{L:>5} | cos {b['cos_it_pt']:.3f} / {b['cos_it_pt_x']:.3f} / {b['cos_it_it']:.3f} | "
+              f"CKA {b['cka_it_pt']:.3f} / {b['cka_it_pt_x']:.3f}")
     print(f"saved: {out}")
 
 
