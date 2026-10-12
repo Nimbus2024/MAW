@@ -136,6 +136,83 @@ def fig_update_cos_layers(root, out):
     plt.close(fig)
 
 
+def fig_c1_baseline(root, out):
+    pools = [("mean", "#1f77b4"), ("last", "#ff7f0e"),
+             ("answer", "#2ca02c"), ("prompt", "#d62728")]
+    fig, axes = plt.subplots(1, 2, figsize=(12.8, 4.6))
+    for p, col in pools:
+        d = json.load(open(find(root, f"cka_layers_{p}.json")))
+        L = d["layers"]
+        b = d["models"]["base"]
+        axes[0].plot(L, [b[str(l)]["cos_it_pt"] for l in L], "-", color=col, lw=1.8, label=f"{p}")
+        axes[0].plot(L, [b[str(l)]["cos_it_pt_x"] for l in L], "--", color=col, lw=1.1)
+        axes[1].plot(L, [b[str(l)]["cos_it_it"] for l in L], "-", color=col, lw=1.8, label=f"{p}")
+    axes[0].set_title(r"cross-modal $\cos$(IT,PT):  solid = same question, dashed = different question")
+    axes[0].set_ylabel(r"$\cos$(IT,PT)")
+    axes[1].set_title(r"same-modality $\cos$(IT,IT), different questions")
+    for ax in axes:
+        ax.set_xlabel("layer index")
+        ax.axhline(0, color="gray", ls=":", lw=0.8)
+        ax.grid(alpha=0.3)
+        ax.legend(frameon=False, fontsize=8)
+    fig.suptitle("C1: is the cross-modal similarity question-specific?  "
+                 "(solid vs dashed overlapping = it is NOT)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    save(fig, out, "fig_c1_baseline")
+    plt.close(fig)
+
+
+def fig_c4b(root, out):
+    scopes = ["forget", "retain_shared", "retain_celebrity"]
+    gcol = {"TT": "#2ca02c", "one": "#ff7f0e", "FF": "#d62728"}
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4))
+    for ax, sc in zip(axes, scopes):
+        d = json.load(open(find(root, f"qa_shared_{sc}.json")))
+        L = d["layers"]
+        for lab in ("TT", "one", "FF"):
+            y = [d["groups"][lab][str(l)]["cos"] for l in L]
+            ax.plot(L, y, "o-", color=gcol[lab], ms=3, lw=1.6,
+                    label=f"{lab} (n={d['counts'][lab]})")
+        ax.set_title(sc)
+        ax.set_xlabel("layer index")
+        ax.grid(alpha=0.3)
+        ax.legend(frameon=False, fontsize=8)
+    axes[0].set_ylabel(r"cross-modal $\cos$(IT,PT)  (mean pool)")
+    fig.suptitle("C4-b: shared component by base-model correctness  "
+                 "(TT = both right, one = one-sided, FF = both wrong)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    save(fig, out, "fig_c4b_shared_groups")
+    plt.close(fig)
+
+
+def fig_c3_ablation(root, out):
+    d = json.load(open(find(root, "shared_ablation.json")))
+    scopes = ["forget", "retain_shared", "retain_celebrity"]
+    layers = sorted(d["layers"], key=int)
+    fig, axes = plt.subplots(1, len(layers), figsize=(6.5 * len(layers), 4.4))
+    if len(layers) == 1:
+        axes = [axes]
+    for ax, L in zip(axes, layers):
+        e = d["layers"][L]["scopes"]
+        x = np.arange(len(scopes))
+        w = 0.38
+        ax.bar(x - w / 2, [e[sc]["Image_Textual"]["delta"] for sc in scopes], w,
+               color="#1f77b4", label="IT")
+        ax.bar(x + w / 2, [e[sc]["Pure_Text"]["delta"] for sc in scopes], w,
+               color="#ff7f0e", label="PT")
+        ax.set_xticks(x)
+        ax.set_xticklabels(scopes, fontsize=8)
+        ax.axhline(0, color="gray", lw=0.8)
+        ax.set_title(f"layer {L}")
+        ax.legend(frameon=False, fontsize=8)
+        ax.grid(alpha=0.3, axis="y")
+    axes[0].set_ylabel(r"$\Delta$CE after removing shared subspace")
+    fig.suptitle(f"C3: project out top-k cross-modal shared directions (k={d['k']})", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    save(fig, out, "fig_c3_shared_ablation")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--eval-root", default="../product/results/_analysis")
@@ -148,7 +225,11 @@ def main():
     fig_cka_layers(root, out)
     fig_grad_cos_steps(root, out, args.vmax)
     fig_update_cos_layers(root, out)
-    print("saved fig_repr_cka_layers, fig_grad_cos_steps, fig_update_cos_layers to", out)
+    fig_c1_baseline(root, out)
+    fig_c4b(root, out)
+    fig_c3_ablation(root, out)
+    print("saved fig_repr_cka_layers, fig_grad_cos_steps, fig_update_cos_layers, "
+          "fig_c1_baseline, fig_c4b_shared_groups, fig_c3_shared_ablation to", out)
 
 
 if __name__ == "__main__":
