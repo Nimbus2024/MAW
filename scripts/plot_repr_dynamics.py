@@ -147,9 +147,10 @@ def fig_c1_baseline(root, out):
         axes[0].plot(L, [b[str(l)]["cos_it_pt"] for l in L], "-", color=col, lw=1.8, label=f"{p}")
         axes[0].plot(L, [b[str(l)]["cos_it_pt_x"] for l in L], "--", color=col, lw=1.1)
         axes[1].plot(L, [b[str(l)]["cos_it_it"] for l in L], "-", color=col, lw=1.8, label=f"{p}")
+        axes[1].plot(L, [b[str(l)]["cos_pt_pt"] for l in L], "--", color=col, lw=1.1)
     axes[0].set_title(r"cross-modal $\cos$(IT,PT):  solid = same question, dashed = different question")
     axes[0].set_ylabel(r"$\cos$(IT,PT)")
-    axes[1].set_title(r"same-modality $\cos$(IT,IT), different questions")
+    axes[1].set_title(r"same-modality, different questions:  solid = IT-IT, dashed = PT-PT")
     for ax in axes:
         ax.set_xlabel("layer index")
         ax.axhline(0, color="gray", ls=":", lw=0.8)
