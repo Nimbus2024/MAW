@@ -28,7 +28,7 @@ def rep_batch(model, items, modality, layers, device, processor, max_length, poo
     mask = attn.unsqueeze(-1).float()
     amask = (labels != -100).unsqueeze(-1).float()
     wmask = amask if (pool == "answer" and amask.sum() > 0) else mask
-    pos = (mask.sum(1).long() - 1).clamp_min(0)
+    pos = (attn.sum(1).long() - 1).clamp_min(0)
     idx = torch.arange(mask.shape[0], device=mask.device)
     out = {}
     for L in layers:
