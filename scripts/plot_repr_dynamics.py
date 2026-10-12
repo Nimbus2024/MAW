@@ -214,6 +214,45 @@ def fig_c3_ablation(root, out):
     plt.close(fig)
 
 
+def fig_c1_segments(root, out):
+    pools = ["mean", "noimg", "image"]
+    colors = {"mean": "#555555", "noimg": "#1f77b4", "image": "#d62728"}
+    D = {}
+    for p in pools:
+        try:
+            D[p] = json.load(open(find(root, f"cka_layers_{p}.json")))
+        except FileNotFoundError:
+            print(f"[fig_c1_segments] missing cka_layers_{p}.json -> skipped")
+            return
+    L = D["mean"]["layers"]
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    for p in pools:
+        b = D[p]["models"]["base"]
+        axes[0].plot(L, [b[str(l)]["cos_it_pt"] for l in L], "-o", ms=3,
+                     color=colors[p], lw=1.6, label=p)
+        axes[1].plot(L, [b[str(l)]["cos_it_it"] for l in L], "-o", ms=3,
+                     color=colors[p], lw=1.6, label=p)
+    for p in ("mean", "noimg"):
+        b = D[p]["models"]["base"]
+        axes[2].plot(L, [b[str(l)]["cos_pt_pt"] for l in L], "-o", ms=3,
+                     color=colors[p], lw=1.6, label=p)
+    axes[0].set_title(r"cross-modal  $\cos$(IT,PT)")
+    axes[1].set_title(r"same-modality IT-IT, diff questions")
+    axes[2].set_title(r"same-modality PT-PT, diff questions")
+    axes[1].set_ylabel("cosine")
+    for ax in axes:
+        ax.set_xlabel("layer index")
+        ax.set_ylim(0, 1.02)
+        ax.axhline(0, color="gray", ls=":", lw=0.8)
+        ax.grid(alpha=0.3)
+        ax.legend(frameon=False, fontsize=8)
+    fig.suptitle("C1 segments: image-token vs non-image-token pooling  "
+                 "(image pool only on IT; PT has no image tokens)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    save(fig, out, "fig_c1_segments")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--eval-root", default="../product/results/_analysis")
@@ -227,6 +266,7 @@ def main():
     fig_grad_cos_steps(root, out, args.vmax)
     fig_update_cos_layers(root, out)
     fig_c1_baseline(root, out)
+    fig_c1_segments(root, out)
     fig_c4b(root, out)
     fig_c3_ablation(root, out)
     print("saved fig_repr_cka_layers, fig_grad_cos_steps, fig_update_cos_layers, "

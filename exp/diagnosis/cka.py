@@ -63,7 +63,8 @@ def probe_pairs(data_split_dir, split, n, seed=42):
 
 
 @torch.no_grad()
-def reps(model, pairs, modality, layers, device, processor, max_length, batch_size=4, pool="mean"):
+def reps(model, pairs, modality, layers, device, processor, max_length, batch_size=4, pool="mean",
+         image_token_id=None):
     out = {L: [] for L in layers}
     for b in range(0, len(pairs), batch_size):
         chunk = pairs[b:b + batch_size]
@@ -77,7 +78,14 @@ def reps(model, pairs, modality, layers, device, processor, max_length, batch_si
         mask = attn.unsqueeze(-1).float()
         amask = (labels != -100).unsqueeze(-1).float()
         pmask = ((labels == -100) & (attn != 0)).unsqueeze(-1).float()
-        wmask = {"mean": mask, "answer": amask, "prompt": pmask}.get(pool)
+        if image_token_id is None:
+            imask = torch.zeros_like(mask)
+            noimg = mask
+        else:
+            imask = ((ids == image_token_id) & (attn != 0)).unsqueeze(-1).float()
+            noimg = ((ids != image_token_id) & (attn != 0)).unsqueeze(-1).float()
+        wmask = {"mean": mask, "answer": amask, "prompt": pmask,
+                 "image": imask, "noimg": noimg}.get(pool)
         if wmask is None or wmask.sum() == 0:
             wmask = mask
         pos = (attn.sum(1).long() - 1).clamp_min(0)
@@ -104,7 +112,7 @@ def main():
     parser.add_argument("--forget_split", default="forget_5")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--pool", choices=["mean", "last", "answer", "prompt"], default="mean")
+    parser.add_argument("--pool", choices=["mean", "last", "answer", "prompt", "image", "noimg"], default="mean")
     args = parser.parse_args()
 
     layers_arg = args.layers.strip()
@@ -114,6 +122,10 @@ def main():
         args.base, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
         local_files_only=True).to(args.device).eval()
     base.config.use_cache = False
+    image_token_id = getattr(base.config, "image_token_index", None)
+    if image_token_id is None:
+        image_token_id = getattr(base.config, "image_token_id", None)
+    print(f"image_token_id: {image_token_id}", flush=True)
     pairs = probe_pairs(args.data_split_dir, args.forget_split, args.n, args.seed)
     if layers_arg.lower() == "all":
         probe = [{"image": pairs[0]["image"], "question": pairs[0]["mm_q"],
@@ -129,7 +141,7 @@ def main():
     print(f"layers: {layers[0]}..{layers[-1]} ({len(layers)})", flush=True)
 
     reps_all = {"base": {m: reps(base, pairs, m, layers, args.device, processor,
-                                 args.max_length, args.batch_size, args.pool)
+                                 args.max_length, args.batch_size, args.pool, image_token_id)
                          for m in ("mm", "um")}}
     print("base reps done", flush=True)
 
@@ -142,7 +154,7 @@ def main():
                 peft.load_adapter(path, adapter_name=name)
             peft.set_adapter(name)
             reps_all[name] = {m: reps(peft, pairs, m, layers, args.device, processor,
-                                      args.max_length, args.batch_size, args.pool)
+                                      args.max_length, args.batch_size, args.pool, image_token_id)
                               for m in ("mm", "um")}
             print(f"{name} reps done", flush=True)
 
