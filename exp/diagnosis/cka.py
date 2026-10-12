@@ -76,7 +76,10 @@ def reps(model, pairs, modality, layers, device, processor, max_length, batch_si
                   output_hidden_states=True, use_cache=False)
         mask = attn.unsqueeze(-1).float()
         amask = (labels != -100).unsqueeze(-1).float()
-        wmask = amask if (pool == "answer" and amask.sum() > 0) else mask
+        pmask = ((labels == -100) & (attn != 0)).unsqueeze(-1).float()
+        wmask = {"mean": mask, "answer": amask, "prompt": pmask}.get(pool)
+        if wmask is None or wmask.sum() == 0:
+            wmask = mask
         pos = (attn.sum(1).long() - 1).clamp_min(0)
         rows = torch.arange(mask.shape[0], device=mask.device)
         for L in layers:
@@ -101,7 +104,7 @@ def main():
     parser.add_argument("--forget_split", default="forget_5")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--pool", choices=["mean", "last", "answer"], default="mean")
+    parser.add_argument("--pool", choices=["mean", "last", "answer", "prompt"], default="mean")
     args = parser.parse_args()
 
     layers_arg = args.layers.strip()
