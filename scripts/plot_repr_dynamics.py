@@ -228,12 +228,18 @@ def fig_c1_segments(root, out):
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
     for p in pools:
         b = D[p]["models"]["base"]
+        axes[1].plot(L, [b[str(l)]["cos_it_it"] for l in L], "-o", ms=3,
+                     color=colors[p], lw=1.6, label=p)
+    for p in ("mean", "noimg"):
+        b = D[p]["models"]["base"]
         axes[0].plot(L, [b[str(l)]["cos_it_pt"] for l in L], "-o", ms=3,
                      color=colors[p], lw=1.6, label=f"{p} (same-q)")
         axes[0].plot(L, [b[str(l)]["cos_it_pt_x"] for l in L], "--", ms=3,
                      color=colors[p], lw=1.1, label=f"{p} (diff-q)")
-        axes[1].plot(L, [b[str(l)]["cos_it_it"] for l in L], "-o", ms=3,
-                     color=colors[p], lw=1.6, label=p)
+    bim = D["image"]["models"]["base"]
+    if "cos_it_img_noimg" in bim[str(L[0])]:
+        axes[0].plot(L, [bim[str(l)]["cos_it_img_noimg"] for l in L], "-.", ms=3,
+                     color="#2ca02c", lw=1.6, label="IT image vs IT text")
     for p in ("mean", "noimg"):
         b = D[p]["models"]["base"]
         axes[2].plot(L, [b[str(l)]["cos_pt_pt"] for l in L], "-o", ms=3,

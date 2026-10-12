@@ -86,8 +86,10 @@ def reps(model, pairs, modality, layers, device, processor, max_length, batch_si
             noimg = ((ids != image_token_id) & (attn != 0)).unsqueeze(-1).float()
         wmask = {"mean": mask, "answer": amask, "prompt": pmask,
                  "image": imask, "noimg": noimg}.get(pool)
-        if wmask is None or wmask.sum() == 0:
-            wmask = mask
+        if wmask is None:
+            raise ValueError(f"unknown pool: {pool}")
+        valid = wmask.sum((1, 2)) > 0
+        denom = wmask.sum(1).clamp_min(1)
         pos = (attn.sum(1).long() - 1).clamp_min(0)
         rows = torch.arange(mask.shape[0], device=mask.device)
         for L in layers:
@@ -95,7 +97,10 @@ def reps(model, pairs, modality, layers, device, processor, max_length, batch_si
             if pool == "last":
                 out[L].append(h[rows, pos].cpu())
             else:
-                out[L].append(((h * wmask).sum(1) / wmask.sum(1).clamp_min(1)).cpu())
+                pooled = (h * wmask).sum(1) / denom
+                if not bool(valid.all()):
+                    pooled = pooled.masked_fill(~valid.unsqueeze(-1), float("nan"))
+                out[L].append(pooled.cpu())
     return {L: torch.cat(v, 0) for L, v in out.items()}
 
 
@@ -158,6 +163,14 @@ def main():
                               for m in ("mm", "um")}
             print(f"{name} reps done", flush=True)
 
+    seg_other = None
+    seg_extra = None
+    if args.pool in ("image", "noimg"):
+        seg_other = "noimg" if args.pool == "image" else "image"
+        seg_extra = reps(base, pairs, "mm", layers, args.device, processor,
+                         args.max_length, args.batch_size, seg_other, image_token_id)
+        print(f"extra mm reps done ({seg_other})", flush=True)
+
     result = {"layers": layers, "n": len(pairs), "pool": args.pool, "models": {}}
     for name, per_mod in reps_all.items():
         entry = {}
@@ -181,6 +194,9 @@ def main():
                 e["cos_pt_base"] = float(torch.nn.functional.cosine_similarity(pt, b_pt, dim=1).mean())
                 e["norm_ratio_it"] = e["norm_it"] / float(b_it.norm(dim=1).mean())
                 e["norm_ratio_pt"] = e["norm_pt"] / float(b_pt.norm(dim=1).mean())
+            if name == "base" and seg_extra is not None:
+                e["cos_it_img_noimg"] = float(
+                    torch.nn.functional.cosine_similarity(it, seg_extra[L], dim=1).mean())
             entry[str(L)] = e
         result["models"][name] = entry
 
