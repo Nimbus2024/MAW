@@ -167,6 +167,7 @@ def main():
     ap.add_argument("--n_target", type=int, default=3)
     ap.add_argument("--n_ref", type=int, default=50)
     ap.add_argument("--k", type=float, default=1.0)
+    ap.add_argument("--q", type=float, default=1.0)
     ap.add_argument("--K", type=int, default=256)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max_length", type=int, default=768)
