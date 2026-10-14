@@ -48,64 +48,37 @@ def _spearman(x, y):
     return float(rx @ ry / d) if d > 0 else float("nan")
 
 
-def fig_A(emaps, outdir, layers, ti=1, q=1.0):
-    """A 方案：完整能量图 |C|^2 的 support/能量重叠（Jaccard + Spearman），含基线与随机。"""
-    z = np.load(emaps)
+def fig_A(jsonpath, outdir, ti=1, q=1.0):
+    """A 方案：完整能量图 |C|^2 的 support(Jaccard) 与能量图相关(Spearman)，逐层 + 基线。"""
+    import json
+    d = json.load(open(jsonpath))
+    pl = d["per_layer"]
+    layers = sorted(int(k) for k in pl)
 
-    def get(m, t, L, proj):
-        key = f"{m}|{t}|model.language_model.layers.{L}.{proj}"
-        return z[key].astype(np.float64) if key in z else None
+    def col(key):
+        return [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
 
-    rows = {}
-    for L in layers:
-        for proj in PROJS:
-            Emm, Eum = get("mm", ti, L, proj), get("um", ti, L, proj)
-            Eit0 = get("mm", 0, L, proj)
-            if Emm is None or Eum is None:
-                continue
-            r = {"J_mm_um": _jaccard(_topq(Emm, q), _topq(Eum, q)),
-                 "rho_mm_um": _spearman(Emm.ravel(), Eum.ravel()),
-                 "J_rand": q / 100.0}
-            if ti > 0 and Eit0 is not None:
-                r["J_cross_it"] = _jaccard(_topq(Emm, q), _topq(Eit0, q))
-                r["rho_cross_it"] = _spearman(Emm.ravel(), Eit0.ravel())
-            rows[(L, proj)] = r
-
-    def mean(key):
-        v = [r[key] for r in rows.values() if key in r and not np.isnan(r[key])]
-        return float(np.mean(v)) if v else float("nan")
-
-    print("=== A: full energy-map overlap (top-%.0f%%, %d modules, target pair %d) ===" % (q, len(rows), ti))
-    for key in ("J_mm_um", "J_rand", "J_cross_it", "rho_mm_um", "rho_cross_it"):
-        print(f"  {key:14s} mean = {mean(key):+.4f}")
-    per_layer = {}
-    for (L, proj), r in rows.items():
-        per_layer.setdefault(L, []).append(r)
-    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.4))
-    ls = sorted(per_layer)
-    x = np.arange(len(ls))
-    w = 0.27
-    axes[0].bar(x - w, [np.mean([r["J_mm_um"] for r in per_layer[L]]) for L in ls], w,
-                color="#d62728", label="mm vs um (same pair)")
-    if any("J_cross_it" in r for L in ls for r in per_layer[L]):
-        axes[0].bar(x, [np.mean([r.get("J_cross_it", np.nan) for r in per_layer[L]]) for L in ls], w,
-                    color="#555555", label="IT$_{i}$ vs IT$_0$ (diff. pair)")
-    axes[0].bar(x + w, [q / 100.0] * len(ls), w, color="#bbbbbb", label="random (=$q$)")
-    axes[1].bar(x - w / 2, [np.mean([r["rho_mm_um"] for r in per_layer[L]]) for L in ls], w,
-                color="#d62728")
-    if any("rho_cross_it" in r for L in ls for r in per_layer[L]):
-        axes[1].bar(x + w / 2, [np.mean([r.get("rho_cross_it", np.nan) for r in per_layer[L]]) for L in ls], w,
-                    color="#555555")
+    J, R = col("jaccard_mm_um"), col("spearman_mm_um")
+    Jc, Rc = col("jaccard_cross_it"), col("spearman_cross_it")
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
+    x = np.arange(len(layers))
+    axes[0].bar(x - 0.2, J, 0.4, color="#d62728", label="mm vs um (same pair)")
+    if any(v is not None for v in Jc):
+        axes[0].bar(x + 0.2, Jc, 0.4, color="#555555", label="IT$_i$ vs IT$_0$ (diff. pair)")
+    axes[0].axhline(q / 100.0, ls=":", color="gray", label="random (=$q$)")
+    axes[1].bar(x - 0.2, R, 0.4, color="#d62728")
+    if any(v is not None for v in Rc):
+        axes[1].bar(x + 0.2, Rc, 0.4, color="#555555")
     for ax, ttl, yl in ((axes[0], "support overlap (top-%g%% Jaccard)" % q, "Jaccard"),
                         (axes[1], "energy-map correlation (Spearman)", r"$\rho$")):
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"L{L}" for L in ls])
-        ax.set_title("A: " + ttl)
+        ax.set_xticks(x[::2])
+        ax.set_xticklabels([f"L{L}" for L in layers[::2]])
+        ax.set_xlabel("layer index")
         ax.set_ylabel(yl)
+        ax.set_title("A: " + ttl)
         ax.grid(alpha=0.3, axis="y")
     axes[0].legend(frameon=False, fontsize=8)
-    fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis "
-                 "(target pair %d; only layers %s were dumped)" % (ti, ls), fontsize=11)
+    fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis (target pair %d)" % ti, fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     save(fig, outdir, "fig_gradsub_A_emaps")
     plt.close(fig)
@@ -208,7 +181,7 @@ def main():
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     save(fig, args.outdir, "fig_gradsub_diag")
     plt.close(fig)
-    fig_A(args.emaps, args.outdir, [int(x) for x in args.layers.split(",")], ti=1)
+    fig_A(args.json_path, args.outdir, ti=1)
     fig_B(args.json_path, args.outdir)
     print("saved fig_gradsub_emaps/diag/A_emaps/B_layers to", args.outdir)
 
