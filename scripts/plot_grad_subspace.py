@@ -52,22 +52,41 @@ def _spearman(x, y):
     return float(rx @ ry / d) if d > 0 else float("nan")
 
 
+def _pair_colors(n):
+    base = list(plt.get_cmap("tab10").colors)
+    return [base[i % len(base)] for i in range(n)]
+
+
+def _baseline(pl, layers, ckey, n_pair):
+    """同模态异题基线：对 pair 1..n-1 取均值（单 pair 噪声大）。"""
+    ys = []
+    for ti in range(1, n_pair):
+        col = [pl[str(L)].get(str(ti), {}).get(ckey) for L in layers]
+        if any(v is not None for v in col):
+            ys.append(col)
+    if not ys:
+        return []
+    return [np.nanmean([y[i] for y in ys]) if any(y[i] is not None for y in ys) else np.nan
+            for i in range(len(layers))]
+
+
 def fig_A(jsonpath, outdir, q=1.0):
     """A 方案：完整能量图 |C|^2 的 support(Jaccard) 与能量图相关(Spearman)，3 个 pair 逐层。"""
     import json
     d = json.load(open(jsonpath))
     pl = d["per_layer"]
     layers = sorted(int(k) for k in pl)
+    n_pair = len(d["per_target"])
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
     for ax, key, ckey, ttl, yl, rnd in (
             (axes[0], "jaccard_mm_um", "jaccard_cross_it",
              "support overlap (top-%g%% Jaccard)" % q, "Jaccard", q / 100.0),
             (axes[1], "spearman_mm_um", "spearman_cross_it",
              "energy-map correlation (Spearman)", r"$\rho$", 0.0)):
-        for ti, col in ((0, "#1f77b4"), (1, "#d62728"), (2, "#2ca02c")):
+        for ti, col in enumerate(_pair_colors(n_pair)):
             y = [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
             ax.plot(layers, y, "-o", ms=2.6, lw=1.4, color=col, label=f"mm vs um (pair {ti})")
-        yc = [pl[str(L)].get("1", {}).get(ckey) for L in layers]
+        yc = _baseline(pl, layers, ckey, n_pair)
         if any(v is not None for v in yc):
             ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
         ax.axhline(rnd, ls=":", color="gray", lw=1.2, label=f"random (={rnd:g})")
@@ -76,7 +95,8 @@ def fig_A(jsonpath, outdir, q=1.0):
         ax.set_title("A: " + ttl)
         ax.grid(alpha=0.3)
     axes[0].legend(frameon=False, fontsize=8)
-    fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis  (all 3 target pairs)", fontsize=11)
+    fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis  "
+                 "(all %d target pairs)" % n_pair, fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     save(fig, outdir, "fig_gradsub_A_emaps")
     plt.close(fig)
@@ -88,14 +108,15 @@ def fig_B(jsonpath, outdir):
     d = json.load(open(jsonpath))
     pl = d["per_layer"]
     layers = sorted(int(k) for k in pl)
+    n_pair = len(d["per_target"])
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
     for ax, key, rnd_key, ttl in ((axes[0], "subL_mm_um", "subL_rand", "left subspace overlap"),
                                   (axes[1], "subR_mm_um", "subR_rand", "right subspace overlap")):
-        for ti, col in ((0, "#1f77b4"), (1, "#d62728"), (2, "#2ca02c")):
+        for ti, col in enumerate(_pair_colors(n_pair)):
             y = [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
             ax.plot(layers, y, "-o", ms=2.6, lw=1.5, color=col, label=f"mm vs um (pair {ti})")
         ckey = "subL_it_i0" if key == "subL_mm_um" else "subR_it_i0"
-        yc = [pl[str(L)].get("1", {}).get(ckey) for L in layers]
+        yc = _baseline(pl, layers, ckey, n_pair)
         if all(v is not None for v in yc):
             ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
         yr = [pl[str(L)].get("0", {}).get(rnd_key) for L in layers]
@@ -122,24 +143,26 @@ def fig_proj(jsonpath, outdir):
               ("subR_mm_um", "subR_it_i0", "B: right (row/input) subspace overlap", "overlap"),
               ("jaccard_mm_um", "jaccard_cross_it", "A: support overlap (Jaccard)", "Jaccard"),
               ("spearman_mm_um", "spearman_cross_it", "A: energy-map correlation (Spearman)", r"$\rho$")]
+    n_pair = len(d["per_target"])
     fig, axes = plt.subplots(2, 2, figsize=(14, 8.4))
-    cols = ["#1f77b4", "#d62728", "#2ca02c"]
+    cols = _pair_colors(n_pair)
     for ax, (key, ckey, ttl, yl) in zip(axes.ravel(), panels):
         x = np.arange(len(projs))
-        w = 0.2
-        for i, ti in enumerate((0, 1, 2)):
+        w = 0.8 / (n_pair + 1)
+        for i, ti in enumerate(range(n_pair)):
             mods = d["per_target"][ti]["modules"]
             y = [np.mean([v[key] for n, v in mods.items() if n.endswith(p)]) for p in projs]
-            ax.bar(x + (i - 1) * w, y, w, color=cols[i], label=f"mm vs um (pair {ti})")
+            ax.bar(x + (i - n_pair / 2.0) * w, y, w, color=cols[i], label=f"mm vs um (pair {ti})")
         yc = []
         for p in projs:
             vals = []
-            for ti in (1, 2):
+            for ti in range(1, n_pair):
                 mods = d["per_target"][ti]["modules"]
                 vals += [v[ckey] for n, v in mods.items() if n.endswith(p) and ckey in v]
             yc.append(np.mean(vals) if vals else np.nan)
         if not np.all(np.isnan(yc)):
-            ax.bar(x + 1 * w, yc, w, color="#555555", label="IT$_i$ vs IT$_0$ (diff. pair)")
+            ax.bar(x + (n_pair - n_pair / 2.0) * w, yc, w, color="#555555",
+                   label="IT$_i$ vs IT$_0$ (diff. pair)")
         ax.set_xticks(x)
         ax.set_xticklabels([p.replace("_proj", "") for p in projs])
         ax.set_ylabel(yl)
@@ -159,13 +182,14 @@ def fig_B_lp(jsonpath, outdir):
     import re
     d = json.load(open(jsonpath))
     projs = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8.6))
+    n_pair = len(d["per_target"])
+    fig, axes = plt.subplots(2, n_pair, figsize=(3.0 * n_pair + 1.6, 8.6), squeeze=False)
     rows = (("subL_mm_um", "subL (left/column-output side)"),
             ("subR_mm_um", "subR (right/row-input side)"))
     ims = {}
     for r, (key, ttl) in enumerate(rows):
         mats, vmax = [], 0.0
-        for ti in (0, 1, 2):
+        for ti in range(n_pair):
             M = np.full((32, len(projs)), np.nan)
             for n, v in d["per_target"][ti]["modules"].items():
                 m = re.search(r"layers\.(\d+)\.", n)
@@ -179,7 +203,7 @@ def fig_B_lp(jsonpath, outdir):
                         M[L, j] = v[key]
             mats.append(M)
             vmax = max(vmax, np.nanmax(M))
-        for c, ti in enumerate((0, 1, 2)):
+        for c, ti in enumerate(range(n_pair)):
             ax = axes[r, c]
             ims[(r, c)] = ax.imshow(mats[c], aspect="auto", origin="lower", cmap="viridis",
                                     vmin=0, vmax=vmax)
@@ -195,9 +219,9 @@ def fig_B_lp(jsonpath, outdir):
                  "(top = subL/left/output, bottom = subR/right/input)", fontsize=12)
     fig.tight_layout(rect=(0, 0, 0.90, 0.94))
     cax1 = fig.add_axes([0.915, 0.55, 0.012, 0.33])
-    fig.colorbar(ims[(0, 2)], cax=cax1).set_label("subL overlap", size=8)
+    fig.colorbar(ims[(0, n_pair - 1)], cax=cax1).set_label("subL overlap", size=8)
     cax2 = fig.add_axes([0.915, 0.11, 0.012, 0.33])
-    fig.colorbar(ims[(1, 2)], cax=cax2).set_label("subR overlap", size=8)
+    fig.colorbar(ims[(1, n_pair - 1)], cax=cax2).set_label("subR overlap", size=8)
     save(fig, outdir, "fig_gradsub_B_lp")
     plt.close(fig)
 
@@ -208,11 +232,12 @@ def fig_cos(jsonpath, outdir):
     d = json.load(open(jsonpath))
     pl = d["per_layer"]
     layers = sorted(int(k) for k in pl)
+    n_pair = len(d["per_target"])
     fig, ax = plt.subplots(figsize=(9.2, 4.8))
-    for ti, col in ((0, "#1f77b4"), (1, "#d62728"), (2, "#2ca02c")):
+    for ti, col in enumerate(_pair_colors(n_pair)):
         y = [pl[str(L)].get(str(ti), {}).get("cos_raw") for L in layers]
         ax.plot(layers, y, "-o", ms=2.8, lw=1.5, color=col, label=f"mm vs um (pair {ti})")
-    yc = [pl[str(L)].get("1", {}).get("cos_raw_cross_it") for L in layers]
+    yc = _baseline(pl, layers, "cos_raw_cross_it", n_pair)
     if any(v is not None for v in yc):
         ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
     ax.axhline(0, ls=":", color="gray", lw=1.2, label="0 = orthogonal")
