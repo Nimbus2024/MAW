@@ -11,9 +11,12 @@
 ├── scripts/                 # 批处理脚本：setup_env.sh(建环境) / run_unlearn.sh / run_retrain.sh / run_eval.sh
 └── exp/                     # 实验功能程序（Python 包，以 python -m exp.<task>.<mod> 运行）
     ├── finetune/            # 微调（ft_dataset / finetune / info_pre）
-    ├── unlearn/             # 遗忘方法：GA.py / KL.py / MAW.py / NPO.py / simPO.py
-    │                        #   (实验 label: GA / KLmin / MAW / NPO / simPO)
-    │                        #   共享 unlearn_dataset.py
+    ├── unlearn/             # 遗忘：统一框架 + 可插拔目标
+    │                        #   framework.py  唯一训练入口(--objective/--gamma_mode)
+    │                        #   objectives.py GA/NPO/simPO/DPO 的 loss(+ KLmin 占位)
+    │                        #   controller.py  γ 控制器(static/sigmoid_ema/sigmoid_gap/ema_level)
+    │                        #   retain.py 前向 KL(π_ref‖π_θ)；data.py 配对数据
+    │                        #   _common.py / _paired.py / unlearn_dataset.py
     ├── retrain/             # 重训练（上界对比，label retrain）
     └── eval/                # 评估（eval_vllm.py 为主；eval_vllm_benchmark.py / eval.py 参考）
 ```
@@ -21,11 +24,20 @@
 术语：**vanilla** = 原始基座 `llava-1.5-7b-hf`；**origin** = 微调基线 `llava_smu_ft`
 （参考项目称 oracle）。
 
-NPO / simPO（逐 epoch 存 `runs/<epoch>/model`）：
-NPO 用冻结参考模型的 log-ratio（对齐官方 NPO），
-`r=(1/|y|)Σ[logπ_θ−logπ_ref]`，`L=−E[(2/β)logσ(−β·r−γ)]`，默认 γ=0；
-simPO 对 DPO 对 (idk, forget) 无参考模型、长度归一化，
-`L=−E[(1/β)logσ(β·(r_idk−r_forget)−γ)]`。
+## 统一框架
+
+所有遗忘方法都是同一个 LLM→MLLM 框架的插件（方法=单模态 loss 函数）：
+
+```
+L = 2[(1-γ)·L_obj(mm) + γ·L_obj(um)] + λ·KL(π_ref‖π_θ)
+```
+
+- **baseline 组**：静态 γ（默认 0.5，可搜）→ `results/baseline/<algo>/`
+- **MAW 组**：动态 γ 控制器 → `results/MAW/<algo>/`
+- 目标（`--objective`）：`GA` / `NPO` / `simPO` / `DPO`（`KLmin` 定义待定，调用即报错）
+- γ 信号 `M = r_w − r_l`（idk 拒绝 vs 原答案的长度归一 reward，`gap = M_mm − M_um`）；
+  **静态 γ 不需要 margin**，框架据此跳过多余的 `w` 分支前向（按需计算）
+- retain 统一为前向 `KL(ref‖θ)`，权重 `λ`（默认 1.5，可搜），两组一致
 
 ## 环境配置（新服务器一键）
 
@@ -63,17 +75,18 @@ cd code
 ## 运行实验 / 评估
 
 ```bash
-./scripts/run_unlearn.sh GA --num_epochs 3     # 训练（label GA）
-./scripts/run_unlearn.sh MAW --eval            # 训练 + 逐 epoch 评估
-./scripts/run_unlearn.sh NPO --eval         # NPO 训练 + 逐 epoch 评估
-./scripts/run_unlearn.sh simPO --beta 0.4 --gamma 0.0 --eval   # simPO
-./scripts/run_retrain.sh --data_dir ...        # retrain 基线
+./scripts/run_unlearn.sh GA --eval                 # baseline GA（静态 γ=0.5）
+./scripts/run_unlearn.sh MAW/GA --eval             # MAW+GA（动态 γ）
+./scripts/run_unlearn.sh MAW/NPO --eval --alpha 0.3 --lmbda 1.5
+./scripts/run_unlearn.sh simPO --gamma 0.3 --eval  # 静态 γ 可搜
+./scripts/run_retrain.sh --data_dir ...            # retrain 基线
 ./scripts/run_eval.sh origin --pretrain --model_id <本地模型目录>   # 评估独立模型
 ```
 
-产物规范（`results/ratio<N>/<label>/<timestamp>/`）：`logs/{stdout.log,tensorboard/}`、
-`config/args.json`、`model/`（最终）；逐 epoch 方法（MAW/NPO/simPO）
-存 `runs/<epoch>/{model,metrics}`。
+产物规范：baseline `results/ratio<N>/baseline/<algo>/<timestamp>/`，
+MAW `results/ratio<N>/MAW/<algo>/<timestamp>/`；
+内含 `logs/{stdout.log,tensorboard/}`、`config/args.json`（含 `group/objective/gamma_mode`）、
+`model/`（最终）、`runs/<epoch>/{model,metrics}`（逐 epoch）。
 
 ## 约定
 

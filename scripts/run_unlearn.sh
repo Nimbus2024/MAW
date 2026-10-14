@@ -1,32 +1,30 @@
 #!/usr/bin/env bash
-# 遗忘(unlearn)实验启动器 — 产物严格对齐 AGENTS 规范。
+# 遗忘(unlearn)实验启动器 — 统一框架入口。
 #
-# 布局: results/<LABEL>/<timestamp>/{logs/{stdout.log,tensorboard/},
-#                                  config/args.json,
-#                                  model/                (最终, 全部方法)
-#                                  runs/<epoch>/{model/,metrics/}   (逐 epoch: GA/KLmin/MAW/NPO/simPO)
+# 布局: <RESULTS_ROOT>/{baseline/<algo>|<algo under MAW>}/<timestamp>/
+#         logs/{stdout.log,tensorboard/}, config/args.json,
+#         runs/<epoch>/{model,metrics}, model/ (最终)
+#
+# 两组(统一框架 L = 2[(1-γ)L_obj(mm)+γL_obj(um)] + λ·KL(ref‖θ)):
+#   baseline : 静态 γ   ->  results/baseline/<GA|NPO|simPO|DPO|KLmin>/<ts>
+#   MAW      : 动态 γ   ->  results/MAW/<GA|NPO|simPO|DPO|KLmin>/<ts>
 #
 # 用法(在 code/ 内、已激活实验 conda 环境, 建议 tmux 运行):
-#   ./scripts/run_unlearn.sh GA       --num_epochs 3     # 仅训练
-#   ./scripts/run_unlearn.sh GA       --eval             # 训练 + 逐 epoch 评估
-#   ./scripts/run_unlearn.sh KLmin    --eval             # KLmin 逐 epoch
-#   ./scripts/run_unlearn.sh MAW      --eval             # MAW 逐 epoch
-#   ./scripts/run_unlearn.sh NPO      --eval             # NPO 逐 epoch
-#   ./scripts/run_unlearn.sh simPO    --eval             # simPO 逐 epoch
-#   ./scripts/run_unlearn.sh DPO      --eval             # DPO 逐 epoch
-#   MAW_NPROC=4 ./scripts/run_unlearn.sh MAW --eval
-#   DATA_SPLIT_DIR=... MODEL_DIR=... ./scripts/run_unlearn.sh GA --eval
-#
-# 超参规则(第一轮):
-#   GBS=<全局batch>  从[64,48,...,2]取首个不OOM; 每进程batch=GBS/NPROC 自动下发
-#   EVAL_CAP=<行数>  评估抽样上限(逐 epoch 用, 如 40); 空=全量
-#   epoch/lr 依 GBS: GBS>=24 → epoch10/lr1e-4; GBS<24 → epoch5/lr5e-5
+#   ./scripts/run_unlearn.sh GA --eval                 # baseline GA (静态 γ=0.5)
+#   ./scripts/run_unlearn.sh MAW/GA --eval             # MAW+GA (动态 γ)
+#   ./scripts/run_unlearn.sh MAW/NPO --eval --alpha 0.3 # 传框架超参
+#   ./scripts/run_unlearn.sh simPO --eval --gamma 0.3 --lmbda 1.5
+#   MAW_NPROC=4 ./scripts/run_unlearn.sh MAW/DPO --eval
+#   RESULTS_ROOT=... DATA_SPLIT_DIR=... ./scripts/run_unlearn.sh GA --eval
 set -euo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
 METHOD="${1:-}"
-[ -n "${METHOD}" ] || { echo "用法: $0 <GA|KLmin|MAW|NPO|simPO|DPO> [--eval] [args...]" >&2; exit 1; }
+[ -n "${METHOD}" ] || {
+  echo "用法: $0 <GA|NPO|simPO|DPO|KLmin|MAW/GA|MAW/NPO|MAW/simPO|MAW/DPO|MAW/KLmin> [--eval] [framework args...]" >&2
+  exit 1
+}
 shift
 
 DO_EVAL=0
@@ -38,18 +36,25 @@ for arg in "$@"; do
   esac
 done
 
-# label↔模块: GA↔GA, KLmin↔KL, MAW/NPO/simPO/DPO↔同名模块
+# METHOD -> (GROUP, OBJECTIVE, GAMMA_MODE)
 case "${METHOD}" in
-  GA)    MODULE="GA"; PER_EPOCH=1 ;;
-  KLmin) MODULE="KL"; PER_EPOCH=1 ;;
-  MAW|NPO|simPO|DPO) MODULE="${METHOD}"; PER_EPOCH=1 ;;
-  *) echo "不支持的方法: ${METHOD} (合法: GA|KLmin|MAW|NPO|simPO|DPO)" >&2; exit 1 ;;
+  GA|NPO|simPO|DPO|KLmin)
+    GROUP="baseline"; OBJECTIVE="${METHOD}"; GAMMA_MODE="static" ;;
+  MAW/GA|MAW/NPO|MAW/simPO|MAW/DPO|MAW/KLmin)
+    GROUP="maw"; OBJECTIVE="${METHOD#MAW/}"; GAMMA_MODE="${MAW_GAMMA_MODE:-sigmoid_ema}" ;;
+  *)
+    echo "不支持的方法: ${METHOD} (合法: GA|NPO|simPO|DPO|KLmin 或 MAW/<algo>)" >&2
+    exit 1 ;;
 esac
 LABEL="${METHOD}"
+# 评估输出文件名不能用 '/'，统一换成 '-'
+LABEL_FILE="${METHOD//\//-}"
 
-# 每进程数: MAW 默认 4 卡 DDP; MAW_SINGLE=1 时单进程 auto-shard(权重摊到各卡, 激活余量大)
+# 每进程数: MAW 组默认 4 卡 DDP; MAW_SINGLE=1 时单进程 auto-shard
 NPROC=1
-[ "${MODULE}" = "MAW" ] && { [ "${MAW_SINGLE:-0}" = "1" ] && NPROC=1 || NPROC="${MAW_NPROC:-4}"; }
+if [ "${GROUP}" = "maw" ]; then
+  [ "${MAW_SINGLE:-0}" = "1" ] && NPROC=1 || NPROC="${MAW_NPROC:-4}"
+fi
 GBS="${GBS:-}"
 if [[ -n "${GBS}" ]]; then
   if [ $((GBS % NPROC)) -ne 0 ]; then
@@ -60,7 +65,7 @@ if [[ -n "${GBS}" ]]; then
   echo "== 全局batch GBS=${GBS} (NPROC=${NPROC}) -> 每进程 batch_size=${PER_RANK} =="
 fi
 
-# 依赖路径(与 setup_env.sh / exp/_paths.py 一致, 可环境变量覆盖)
+# 依赖路径
 RESULTS_ROOT="${RESULTS_ROOT:-${CODE_ROOT}/../results}"
 MODEL_DIR="${MODEL_DIR:-${CODE_ROOT}/../dependencies/models}"
 DATA_SPLIT_DIR="${DATA_SPLIT_DIR:-${CODE_ROOT}/../dependencies/data/UMU-bench}"
@@ -68,11 +73,14 @@ VANILLA_DIR="${VANILLA_DIR:-${MODEL_DIR}/llava-1.5-7b-hf}"
 ORIGIN_DIR="${ORIGIN_DIR:-${MODEL_DIR}/llava_smu_ft}"
 
 TS="$(date +%Y%m%d_%H%M%S)${RUN_SUFFIX:-}"
-RUN_DIR="${RESULTS_ROOT}/${LABEL}/${TS}"
+if [ "${GROUP}" = "baseline" ]; then
+  RUN_DIR="${RESULTS_ROOT}/baseline/${OBJECTIVE}/${TS}"
+else
+  RUN_DIR="${RESULTS_ROOT}/MAW/${OBJECTIVE}/${TS}"
+fi
 mkdir -p "${RUN_DIR}/logs/tensorboard" "${RUN_DIR}/config"
 exec > >(tee "${RUN_DIR}/logs/stdout.log") 2>&1
-echo "== [$(date +%H:%M:%S)] ${LABEL} run dir: ${RUN_DIR} =="
-echo "== 输出日志: ${RUN_DIR}/logs/stdout.log =="
+echo "== [$(date +%H:%M:%S)] ${LABEL} (group=${GROUP}, objective=${OBJECTIVE}, gamma=${GAMMA_MODE}) run dir: ${RUN_DIR} =="
 
 eval_adapter() {
   local adapter_dir="$1" out_folder="$2" out_file="$3"
@@ -102,28 +110,21 @@ eval_adapter() {
   fi
 }
 
-echo "== 训练: exp.unlearn.${MODULE} =="
+echo "== 训练: exp.unlearn.framework (objective=${OBJECTIVE}, gamma_mode=${GAMMA_MODE}) =="
+FW_ARGS=(--objective "${OBJECTIVE}" --group "${GROUP}" --gamma_mode "${GAMMA_MODE}"
+         --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}"
+         --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}")
 (
   cd "${CODE_ROOT}"
-  if [ "${MODULE}" = "MAW" ] && [ "${MAW_SINGLE:-0}" != "1" ]; then
+  if [ "${GROUP}" = "maw" ] && [ "${MAW_SINGLE:-0}" != "1" ]; then
     "${PYTHON}" -m accelerate.commands.launch --num_processes "${MAW_NPROC:-4}" \
-      -m exp.unlearn.MAW \
-      --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
-      --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}" \
-      "${TRAIN_ARGS[@]}"
+      -m exp.unlearn.framework "${FW_ARGS[@]}" "${TRAIN_ARGS[@]}"
   else
-    # GA/KLmin 无 --processor_dir 参数(用 --model_id 作 processor 源); NPO/simPO/DPO/MAW(single) 有
-    extra=()
-    case "${MODULE}" in NPO|simPO|DPO|MAW) extra=(--processor_dir "${ORIGIN_DIR}") ;; esac
-    "${PYTHON}" -m "exp.unlearn.${MODULE}" \
-      --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}" \
-      --data_split_dir "${DATA_SPLIT_DIR}" \
-      "${extra[@]}" \
-      "${TRAIN_ARGS[@]}"
+    "${PYTHON}" -m exp.unlearn.framework "${FW_ARGS[@]}" "${TRAIN_ARGS[@]}"
   fi
 )
 
-# 在 args.json 里明确记录 batch 语义, 避免把每进程当全局
+# 在 args.json 里明确记录 batch 语义
 if [ -f "${RUN_DIR}/config/args.json" ]; then
   "${PYTHON}" - "${RUN_DIR}/config/args.json" "${NPROC}" "${GBS:-}" <<'PY'
 import json, sys
@@ -138,21 +139,16 @@ PY
 fi
 
 if [ "${DO_EVAL}" = "1" ]; then
-  if [ "${PER_EPOCH}" = "1" ]; then
-    for epoch_model in "${RUN_DIR}"/runs/epoch-*/model; do
-      [ -d "${epoch_model}" ] || continue
-      local_epoch="$(basename "$(dirname "${epoch_model}")")"
-      eval_adapter "${epoch_model}" \
-        "${RUN_DIR}/runs/${local_epoch}/metrics" \
-        "${LABEL}_${local_epoch}"
-    done
-    # 逐 epoch 评估(用 EVAL_CAP 抽样)。最终 model/ 的"全量"评估只在调优定稿后
-    # FINAL_FULL=1 才执行, 避免每轮都跑全量浪费。
-    if [ "${FINAL_FULL:-0}" = "1" ]; then
-      EVAL_CAP="" eval_adapter "${RUN_DIR}/model" "${RUN_DIR}/metrics" "${LABEL}_final"
-    fi
-  else
-    eval_adapter "${RUN_DIR}/model" "${RUN_DIR}/metrics" "${LABEL}_final"
+  for epoch_model in "${RUN_DIR}"/runs/epoch-*/model; do
+    [ -d "${epoch_model}" ] || continue
+    local_epoch="$(basename "$(dirname "${epoch_model}")")"
+    eval_adapter "${epoch_model}" \
+      "${RUN_DIR}/runs/${local_epoch}/metrics" \
+      "${LABEL_FILE}_${local_epoch}"
+  done
+  # 最终 model/ 的全量评估只在 FINAL_FULL=1 时执行
+  if [ "${FINAL_FULL:-0}" = "1" ]; then
+    EVAL_CAP="" eval_adapter "${RUN_DIR}/model" "${RUN_DIR}/metrics" "${LABEL_FILE}_final"
   fi
 fi
 
