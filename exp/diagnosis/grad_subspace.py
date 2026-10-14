@@ -41,6 +41,27 @@ def _mem(tag):
               f"reserved={torch.cuda.memory_reserved()/1e9:.1f}GB", flush=True)
 
 
+def top_q_np(E, q):
+    arr = E.ravel()
+    k = max(1, int(round(q / 100.0 * arr.size)))
+    thr = np.partition(arr, -k)[-k]
+    return arr >= thr
+
+
+def _jaccard(a, b):
+    i = int(np.logical_and(a, b).sum())
+    u = int(np.logical_or(a, b).sum())
+    return i / u if u else float("nan")
+
+
+def _spearman_np(x, y):
+    rx = x.argsort().argsort().astype(np.float64)
+    ry = y.argsort().argsort().astype(np.float64)
+    rx -= rx.mean(); ry -= ry.mean()
+    d = np.linalg.norm(rx) * np.linalg.norm(ry)
+    return float(rx @ ry / d) if d > 0 else float("nan")
+
+
 def collect_modules(model):
     mods = {}
     for name, m in model.named_modules():
@@ -157,7 +178,8 @@ def main():
     ap.add_argument("--emap_out", default="")
     args = ap.parse_args()
     torch.set_grad_enabled(True)
-    saveC = set(x.strip() for x in args.save_C_layers.split(',') if x.strip())
+    saveC = None if args.save_C_layers.strip().lower() == 'all' else \
+        set(x.strip() for x in args.save_C_layers.split(',') if x.strip())
 
     processor = AutoProcessor.from_pretrained(args.base, local_files_only=True)
     processor.num_additional_image_tokens = 1
@@ -241,8 +263,8 @@ def main():
                 rec["Ug"] = Ug.detach().half().cpu()
                 rec["Vg"] = Vg.detach().half().cpu()
                 lay = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
-                if lay in saveC:
-                    rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
+                rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
+                rec["lay"] = lay
                 _e[n] = rec
 
             run_pass(model, grabber, p, m, args.device, processor,
@@ -270,11 +292,17 @@ def main():
             r["subR_mm_um"] = float((Vm.t() @ Vu).pow(2).sum()) / k
             r["subL_rand"] = k / em["shape"][0]
             r["subR_rand"] = k / em["shape"][1]
+            Em, Eu = em["E"].astype(np.float32), eu["E"].astype(np.float32)
+            r["jaccard_mm_um"] = _jaccard(top_q_np(Em, args.q), top_q_np(Eu, args.q))
+            r["spearman_mm_um"] = _spearman_np(Em.ravel(), Eu.ravel())
             if ti > 0:
                 e0 = diags["mm"][0][n]
                 r["cos_diag_cross_it"] = cosine(em["diag"], e0["diag"])
                 U0 = e0["Ug"].float()
                 r["subL_it_i0"] = float((Um.t() @ U0).pow(2).sum()) / k
+                E0 = e0["E"].astype(np.float32)
+                r["jaccard_cross_it"] = _jaccard(top_q_np(Em, args.q), top_q_np(E0, args.q))
+                r["spearman_cross_it"] = _spearman_np(Em.ravel(), E0.ravel())
             rec[n] = r
         out["per_target"].append({"index": ti, "modules": rec})
         lay = {}
@@ -284,7 +312,8 @@ def main():
         for L, rs in lay.items():
             agg = {}
             for key in ("cos_diag", "offdiag_mm", "offdiag_um", "cos_diag_cross_it",
-                        "subL_mm_um", "subR_mm_um", "subL_rand", "subR_rand", "subL_it_i0"):
+                        "subL_mm_um", "subR_mm_um", "subL_rand", "subR_rand", "subL_it_i0",
+                        "jaccard_mm_um", "spearman_mm_um", "jaccard_cross_it", "spearman_cross_it"):
                 vals = [x[key] for x in rs if x.get(key) is not None]
                 if vals:
                     agg[key] = float(np.mean(vals))
@@ -310,7 +339,7 @@ def main():
         for m in ("mm", "um"):
             for ti in range(len(targets)):
                 for n, e in diags[m][ti].items():
-                    if "E" in e:
+                    if saveC is None or e.get("lay") in saveC:
                         arrs[f"{m}|{ti}|{n}"] = e["E"]
         np.savez_compressed(args.emap_out, **arrs)
         print(f"emaps: {args.emap_out} ({len(arrs)} maps)", flush=True)
