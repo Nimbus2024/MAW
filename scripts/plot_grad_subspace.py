@@ -109,6 +109,46 @@ def fig_B(jsonpath, outdir):
     plt.close(fig)
 
 
+def fig_proj(jsonpath, outdir):
+    """逐投影(7 个)分解：B 的 subL/subR 与 A 的 Jaccard/Spearman（3 个 pair + 同模态基线）。"""
+    import json
+    d = json.load(open(jsonpath))
+    projs = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    panels = [("subL_mm_um", "subL_it_i0", "B: left (column/output) subspace overlap", "overlap"),
+              ("subR_mm_um", "subR_it_i0", "B: right (row/input) subspace overlap", "overlap"),
+              ("jaccard_mm_um", "jaccard_cross_it", "A: support overlap (Jaccard)", "Jaccard"),
+              ("spearman_mm_um", "spearman_cross_it", "A: energy-map correlation (Spearman)", r"$\rho$")]
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8.4))
+    cols = ["#1f77b4", "#d62728", "#2ca02c"]
+    for ax, (key, ckey, ttl, yl) in zip(axes.ravel(), panels):
+        x = np.arange(len(projs))
+        w = 0.2
+        for i, ti in enumerate((0, 1, 2)):
+            mods = d["per_target"][ti]["modules"]
+            y = [np.mean([v[key] for n, v in mods.items() if n.endswith(p)]) for p in projs]
+            ax.bar(x + (i - 1) * w, y, w, color=cols[i], label=f"mm vs um (pair {ti})")
+        yc = []
+        for p in projs:
+            vals = []
+            for ti in (1, 2):
+                mods = d["per_target"][ti]["modules"]
+                vals += [v[ckey] for n, v in mods.items() if n.endswith(p) and ckey in v]
+            yc.append(np.mean(vals) if vals else np.nan)
+        if not np.all(np.isnan(yc)):
+            ax.bar(x + 1 * w, yc, w, color="#555555", label="IT$_i$ vs IT$_0$ (diff. pair)")
+        ax.set_xticks(x)
+        ax.set_xticklabels([p.replace("_proj", "") for p in projs])
+        ax.set_ylabel(yl)
+        ax.set_title(ttl, fontsize=10)
+        ax.grid(alpha=0.3, axis="y")
+    axes[0, 0].legend(frameon=False, fontsize=8)
+    fig.suptitle("per-projection breakdown (each layer = mean over its 7 projections in the line plots)",
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    save(fig, outdir, "fig_gradsub_proj")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--emaps", default="../product/results/_analysis/grad_subspace_emaps.npz")
@@ -181,6 +221,7 @@ def main():
     plt.close(fig)
     fig_A(args.json_path, args.outdir)
     fig_B(args.json_path, args.outdir)
+    fig_proj(args.json_path, args.outdir)
     print("saved fig_gradsub_emaps/diag/A_emaps/B_layers to", args.outdir)
 
 
