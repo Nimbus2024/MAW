@@ -20,6 +20,21 @@ def _parquets(data_split_dir, ratio):
             os.path.join(retain_root, "train-00000-of-00001.parquet"))
 
 
+def _retain_collate(examples, processor, args):
+    """collate_plain 对 plain 分支返回 tuple (ids, attn, pixel, labels)；
+    统一转成 dict，保证 retain/framework 侧接口一致。"""
+    plain = collate_plain(examples, processor, args)
+
+    def as_dict(item):
+        if isinstance(item, dict):
+            return item
+        input_ids, attention_mask, pixel_values, labels = item
+        return {"input_ids": input_ids, "attention_mask": attention_mask,
+                "pixel_values": pixel_values, "labels": labels}
+
+    return {"mm": as_dict(plain["mm"]), "um": as_dict(plain["um"])}
+
+
 def build_forget_loader(args, processor):
     forget_parquet, _ = _parquets(args.data_split_dir, args.forget_split_ratio)
     df_forget = pd.read_parquet(forget_parquet)
@@ -43,7 +58,7 @@ def build_retain_loader(args, processor, n_samples):
     dl_retain = DataLoader(
         retain_ds, batch_size=args.batch_size,
         sampler=RandomSampler(retain_ds, replacement=False, num_samples=n_samples),
-        collate_fn=lambda x: collate_plain(x, processor, args),
+        collate_fn=lambda x: _retain_collate(x, processor, args),
     )
     print(f"Retain pairs: {len(retain_ds)} (每 epoch 抽 {n_samples})")
     return dl_retain
