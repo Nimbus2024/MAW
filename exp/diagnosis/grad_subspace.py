@@ -270,7 +270,7 @@ def main():
                 rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
                 rec["lay"] = lay
                 if _m == "mm":
-                    rec["raw"] = gw.cpu()
+                    rec["raw"] = gw.to(torch.bfloat16).cpu()
                 else:
                     gm = diags["mm"][_ti][n]["raw"].to(gw.device).float()
                     rec["cos_raw"] = float((gm * gw).sum()
