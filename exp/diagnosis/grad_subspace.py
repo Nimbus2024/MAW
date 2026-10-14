@@ -249,8 +249,11 @@ def main():
                 gh = gw / _v[n].float()
                 flat = gh.abs().reshape(-1)
                 kk = max(1, int(round(args.k / 100.0 * flat.numel())))
-                thr = torch.topk(flat, kk).values.min()
-                gthr = torch.where(gh.abs() >= thr, gh, torch.zeros_like(gh))
+                if kk >= flat.numel():          # k=100% -> 不做阈值(去掉稀疏化)
+                    gthr = gh
+                else:
+                    thr = torch.topk(flat, kk).values.min()
+                    gthr = torch.where(gh.abs() >= thr, gh, torch.zeros_like(gh))
                 U, V = basis[n]
                 U = U.to(gthr.device)
                 V = V.to(gthr.device)

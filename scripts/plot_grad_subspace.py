@@ -17,7 +17,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
+SUFFIX = ""
+
+
 def save(fig, outdir, name):
+    name = name + SUFFIX
     fig.savefig(Path(outdir) / f"{name}.svg")
     fig.savefig(Path(outdir) / f"{name}.png", dpi=150)
 
@@ -230,7 +234,10 @@ def main():
     ap.add_argument("--outdir", default="../references/think/figs")
     ap.add_argument("--layers", default="8,16,24,31")
     ap.add_argument("--target", type=int, default=0)
+    ap.add_argument("--suffix", default="")
     args = ap.parse_args()
+    global SUFFIX
+    SUFFIX = args.suffix
     z = np.load(args.emaps)
     layers = [int(x) for x in args.layers.split(",")]
     ti = args.target
