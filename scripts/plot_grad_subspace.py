@@ -198,6 +198,30 @@ def fig_B_lp(jsonpath, outdir):
     plt.close(fig)
 
 
+def fig_cos(jsonpath, outdir):
+    """直接梯度余弦：cos(gW_mm, gW_um) 逐层（3 个 pair + 同模态基线 + 0 线）。"""
+    import json
+    d = json.load(open(jsonpath))
+    pl = d["per_layer"]
+    layers = sorted(int(k) for k in pl)
+    fig, ax = plt.subplots(figsize=(9.2, 4.8))
+    for ti, col in ((0, "#1f77b4"), (1, "#d62728"), (2, "#2ca02c")):
+        y = [pl[str(L)].get(str(ti), {}).get("cos_raw") for L in layers]
+        ax.plot(layers, y, "-o", ms=2.8, lw=1.5, color=col, label=f"mm vs um (pair {ti})")
+    yc = [pl[str(L)].get("1", {}).get("cos_raw_cross_it") for L in layers]
+    if any(v is not None for v in yc):
+        ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
+    ax.axhline(0, ls=":", color="gray", lw=1.2, label="0 = orthogonal")
+    ax.set_xlabel("layer index")
+    ax.set_ylabel(r"$\cos(gW_{mm}, gW_{um})$")
+    ax.set_title("direct per-module gradient cosine (raw gW, answer tokens, base model)", fontsize=10)
+    ax.grid(alpha=0.3)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    save(fig, outdir, "fig_gradsub_cos")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--emaps", default="../product/results/_analysis/grad_subspace_emaps.npz")
@@ -272,6 +296,7 @@ def main():
     fig_B(args.json_path, args.outdir)
     fig_proj(args.json_path, args.outdir)
     fig_B_lp(args.json_path, args.outdir)
+    fig_cos(args.json_path, args.outdir)
     print("saved fig_gradsub_emaps/diag/A_emaps/B_layers to", args.outdir)
 
 

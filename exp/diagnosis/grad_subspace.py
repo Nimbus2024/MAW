@@ -245,7 +245,7 @@ def main():
         for ti, p in enumerate(targets):
             entry = {}
 
-            def acc_target(n, gw, _e=entry, _v=vhat):
+            def acc_target(n, gw, _e=entry, _v=vhat, _m=m, _ti=ti):
                 gh = gw / _v[n].float()
                 flat = gh.abs().reshape(-1)
                 kk = max(1, int(round(args.k / 100.0 * flat.numel())))
@@ -266,6 +266,13 @@ def main():
                 lay = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
                 rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
                 rec["lay"] = lay
+                if _m == "mm":
+                    rec["raw"] = gw.half().cpu()
+                else:
+                    gm = diags["mm"][_ti][n]["raw"].to(gw.device).float()
+                    rec["cos_raw"] = float((gm * gw).sum()
+                                           / (gm.norm() * gw.norm() + 1e-12))
+                    del gm
                 _e[n] = rec
 
             run_pass(model, grabber, p, m, args.device, processor,
@@ -303,6 +310,10 @@ def main():
                 r["subL_it_i0"] = float((Um.t() @ U0).pow(2).sum()) / k
                 V0 = e0["Vg"].float()
                 r["subR_it_i0"] = float((Vm.t() @ V0).pow(2).sum()) / k
+                a0 = e0["raw"].float()
+                a1 = em["raw"].float()
+                r["cos_raw_cross_it"] = float((a0 * a1).sum()
+                                              / (a0.norm() * a1.norm() + 1e-12))
                 E0 = e0["E"].astype(np.float32)
                 r["jaccard_cross_it"] = _jaccard(top_q_np(Em, args.q), top_q_np(E0, args.q))
                 r["spearman_cross_it"] = _spearman_np(Em.ravel(), E0.ravel())
@@ -316,7 +327,8 @@ def main():
             agg = {}
             for key in ("cos_diag", "offdiag_mm", "offdiag_um", "cos_diag_cross_it",
                         "subL_mm_um", "subR_mm_um", "subL_rand", "subR_rand", "subL_it_i0", "subR_it_i0",
-                        "jaccard_mm_um", "spearman_mm_um", "jaccard_cross_it", "spearman_cross_it"):
+                        "jaccard_mm_um", "spearman_mm_um", "jaccard_cross_it", "spearman_cross_it",
+                        "cos_raw", "cos_raw_cross_it"):
                 vals = [x[key] for x in rs if x.get(key) is not None]
                 if vals:
                     agg[key] = float(np.mean(vals))
