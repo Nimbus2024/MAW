@@ -35,7 +35,7 @@ def _policy_logp(model, batch, normalize=True):
 # ── GA: gradient ascent（最大化 forget 答案的 CE） ────────────────────────────
 def ga(model, ref, l, w, args):
     lp = _policy_logp(model, l)
-    loss = -lp.mean()
+    loss = lp.mean()
     reward_l = lp.detach()
     reward_w = _policy_logp(model, w).detach() if w is not None else None
     return loss, reward_l, reward_w
