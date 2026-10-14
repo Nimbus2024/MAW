@@ -14,7 +14,7 @@
     ├── unlearn/             # 遗忘：统一框架 + 可插拔目标
     │                        #   framework.py  唯一训练入口(--objective/--gamma_mode)
     │                        #   objectives.py GA/NPO/simPO/DPO 的 loss(+ KLmin 占位)
-    │                        #   controller.py  γ 控制器(static/sigmoid_ema/sigmoid_gap/ema_level)
+    │                        #   controller.py  γ 控制器(static / ema_level)
     │                        #   retain.py 前向 KL(π_ref‖π_θ)；data.py 配对数据
     │                        #   _common.py / _paired.py / unlearn_dataset.py
     ├── retrain/             # 重训练（上界对比，label retrain）

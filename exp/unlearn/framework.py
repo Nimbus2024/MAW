@@ -3,8 +3,8 @@
 
     L = 2[(1-γ)·L_obj(mm) + γ·L_obj(um)] + λ·KL(π_ref‖π_θ)
 
-- baseline 组：`--gamma_mode static|fixed`（常数 γ，默认 0.5）
-- MAW 组    ：`--gamma_mode sigmoid_ema|sigmoid_gap|ema_level`（动态 γ，需要 margin）
+- baseline 组：`--gamma_mode static`（常数 γ，默认 0.5）
+- MAW 组    ：`--gamma_mode ema_level`（动态 γ `σ(α·ŝ)`；`rho=0` 时即 `σ(α·gap)`）
 - 方法 = `objectives.py` 里的插件；本文件不含任何具体方法逻辑。
 - 按需前向：静态 γ 且 objective 不需要 w 时，**完全不前向 w**。
 
@@ -247,13 +247,13 @@ def build_parser():
                         help="DPO forget loss coefficient: /beta or 1")
     # controller
     parser.add_argument("--gamma_mode",
-                        choices=("static", "fixed", "sigmoid_ema", "sigmoid_gap", "ema_level"),
+                        choices=("static", "ema_level"),
                         default="static")
     parser.add_argument("--gamma", type=float, default=0.5,
                         help="静态 γ（baseline 组，可搜）")
-    parser.add_argument("--gamma_fixed", type=float, default=0.5, help="gamma_mode=fixed 的常数")
     parser.add_argument("--alpha", type=float, default=1.0, help="控制器 sigmoid 增益")
-    parser.add_argument("--rho", type=float, default=0.8, help="gap EMA 平滑系数")
+    parser.add_argument("--rho", type=float, default=0.0,
+                        help="gap 水平 EMA 平滑系数（ema_level）；0 = 纯瞬时 gap（可搜，最后搜）")
     parser.add_argument("--bias_correct", choices=("on", "off"), default="on")
     # retain
     parser.add_argument("--lmbda", type=float, default=1.5, help="retain KL 权重（可搜）")

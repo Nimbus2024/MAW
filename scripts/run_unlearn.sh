@@ -41,7 +41,7 @@ case "${METHOD}" in
   GA|NPO|simPO|DPO|KLmin)
     GROUP="baseline"; OBJECTIVE="${METHOD}"; GAMMA_MODE="static" ;;
   MAW/GA|MAW/NPO|MAW/simPO|MAW/DPO|MAW/KLmin)
-    GROUP="maw"; OBJECTIVE="${METHOD#MAW/}"; GAMMA_MODE="${MAW_GAMMA_MODE:-sigmoid_ema}" ;;
+    GROUP="maw"; OBJECTIVE="${METHOD#MAW/}"; GAMMA_MODE="${MAW_GAMMA_MODE:-ema_level}" ;;
   *)
     echo "不支持的方法: ${METHOD} (合法: GA|NPO|simPO|DPO|KLmin 或 MAW/<algo>)" >&2
     exit 1 ;;
@@ -114,6 +114,10 @@ echo "== 训练: exp.unlearn.framework (objective=${OBJECTIVE}, gamma_mode=${GAM
 FW_ARGS=(--objective "${OBJECTIVE}" --group "${GROUP}" --gamma_mode "${GAMMA_MODE}"
          --run_dir "${RUN_DIR}" --vanilla_dir "${ORIGIN_DIR}"
          --processor_dir "${ORIGIN_DIR}" --data_split_dir "${DATA_SPLIT_DIR}")
+# MAW 组默认控制器超参（命令行上的 --alpha/--rho 会覆盖这些默认值）
+if [ "${GROUP}" = "maw" ]; then
+  FW_ARGS+=(--alpha "${MAW_ALPHA:-0.3}" --rho "${MAW_RHO:-0}")
+fi
 (
   cd "${CODE_ROOT}"
   if [ "${GROUP}" = "maw" ] && [ "${MAW_SINGLE:-0}" != "1" ]; then
