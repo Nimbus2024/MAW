@@ -170,7 +170,7 @@ def main():
     else:
         basis = {}
         for n, mod in modules.items():
-            U, V = torch.svd_lowrank(mod.weight.detach().float(), q=args.K)
+            U, S, V = torch.svd_lowrank(mod.weight.detach().float(), q=args.K)
             basis[n] = (U.contiguous(), V.contiguous())
         if cache_path:
             torch.save(basis, cache_path)
