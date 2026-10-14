@@ -90,8 +90,8 @@ def fig_B(jsonpath, outdir):
         for ti, col in ((0, "#1f77b4"), (1, "#d62728"), (2, "#2ca02c")):
             y = [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
             ax.plot(layers, y, "-o", ms=2.6, lw=1.5, color=col, label=f"mm vs um (pair {ti})")
-        yc = [pl[str(L)].get("1", {}).get("subL_it_i0") if key == "subL_mm_um" else None
-              for L in layers]
+        ckey = "subL_it_i0" if key == "subL_mm_um" else "subR_it_i0"
+        yc = [pl[str(L)].get("1", {}).get(ckey) for L in layers]
         if all(v is not None for v in yc):
             ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
         yr = [pl[str(L)].get("0", {}).get(rnd_key) for L in layers]
