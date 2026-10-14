@@ -100,7 +100,8 @@ def answer_pos_mask(labels):
 
 
 @torch.enable_grad()
-def one_pass(model, grabber, pair, modality, device, processor, max_length, timing=False):
+def run_pass(model, grabber, pair, modality, device, processor, max_length, handler, timing=False):
+    """一次前向/反向; 逐模块算 gW 后立刻交给 handler(name, gW) 并释放（不整体持有）。"""
     item = {"image": pair["image"] if modality == "mm" else None,
             "question": pair["mm_q"] if modality == "mm" else pair["um_q"],
             "answer": pair["mm_a"] if modality == "mm" else pair["um_a"]}
@@ -114,11 +115,16 @@ def one_pass(model, grabber, pair, modality, device, processor, max_length, timi
     loss.backward()
     t2 = time.time()
     pos = answer_pos_mask(labels)
-    out = {n: grad_of_W(grabber.a[n], grabber.d[n], pos) for n in grabber.a if n in grabber.d}
+    for n in list(grabber.a):
+        if n not in grabber.d:
+            continue
+        gw = grad_of_W(grabber.a[n], grabber.d[n], pos)
+        handler(n, gw)
+        del gw
     grabber.clear()
     if timing:
         print(f"    fwd={t1-t0:.2f} bwd={t2-t1:.2f} dW={time.time()-t2:.2f}", flush=True)
-    return out, float(loss.item())
+    return float(loss.item())
 
 
 def main():
@@ -180,24 +186,25 @@ def main():
     for m in ("mm", "um"):
         vhat = {n: torch.zeros(modules[n].weight.shape, dtype=torch.float32,
                                device=args.device) for n in names}
+
+        def acc_ref(n, gw, _v=vhat):
+            _v[n].add_(gw * gw)
+
         for si, p in enumerate(refs):
-            g, _ = one_pass(model, grabber, p, m, args.device, processor,
-                            args.max_length, args.timing)
-            for n, w in g.items():
-                vhat[n].add_(w * w)
-            del g
+            run_pass(model, grabber, p, m, args.device, processor,
+                     args.max_length, acc_ref, args.timing)
             if (si + 1) % 5 == 0:
                 print(f"  ref {m} {si+1}/{len(refs)}", flush=True)
         for n in names:
             vhat[n] = vhat[n].sqrt_().div_(np.sqrt(len(refs))).add_(1e-8)
         print(f"  vhat[{m}] ready", flush=True)
+
         diags[m] = []
         for ti, p in enumerate(targets):
-            g, _ = one_pass(model, grabber, p, m, args.device, processor,
-                            args.max_length, args.timing)
             entry = {}
-            for n in names:
-                gh = g[n] / vhat[n]
+
+            def acc_target(n, gw, _e=entry, _v=vhat):
+                gh = gw / _v[n]
                 flat = gh.abs().reshape(-1)
                 kk = max(1, int(round(args.k / 100.0 * flat.numel())))
                 thr = torch.topk(flat, kk).values.min()
@@ -207,8 +214,10 @@ def main():
                 V = V.to(gthr.device)
                 C = U.t() @ gthr @ V
                 d = torch.diagonal(C).cpu()
-                entry[n] = (d, float((d * d).sum()), float((gthr * gthr).sum()))
-            del g
+                _e[n] = (d, float((d * d).sum()), float((gthr * gthr).sum()))
+
+            run_pass(model, grabber, p, m, args.device, processor,
+                     args.max_length, acc_target, args.timing)
             diags[m].append(entry)
             print(f"  target {m} {ti+1}/{len(targets)}", flush=True)
         del vhat
