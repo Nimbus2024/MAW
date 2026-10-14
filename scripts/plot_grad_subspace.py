@@ -154,10 +154,13 @@ def main():
             ax.set_xticks([0, k // 2, k - 1])
             ax.set_yticks([0, k // 2, k - 1])
             ax.tick_params(labelsize=7)
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.03).ax.tick_params(labelsize=6)
-    fig.suptitle(f"|C|$^2$ energy maps in W's SVD basis  (target pair {ti}; cyan dashed = diagonal)\n"
-                 "diag energy ~ K/(d_out*d_in) % means the diagonal is essentially empty",
-                 fontsize=12)
+            cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+            cb.ax.tick_params(labelsize=6)
+            cb.set_label(r"$\log_{10}|C|^2$", size=7)
+    fig.suptitle(f"$|C|^2$ energy maps in W's SVD basis  (target pair {ti}; cyan dashed = diagonal)\n"
+                 "colorbar = log10|C|^2  (negative ticks = SMALL energies;  E = |C|^2 ≥ 0) — "
+                 "diag energy ~ K/(d_out·d_in) % means the diagonal is essentially empty",
+                 fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     save(fig, args.outdir, "fig_gradsub_emaps")
     plt.close(fig)
@@ -177,7 +180,8 @@ def main():
         ax.set_ylabel("|diag(C)|$^2$")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=7, ncol=2, frameon=False)
-    fig.suptitle("the 'diagonal' carries essentially no energy (values near numerical floor)", fontsize=11)
+    fig.suptitle(r"diagonal profile $|\mathrm{diag}(C)|^2$ (log axis) — "
+                 "carries essentially no energy (near numerical floor)", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     save(fig, args.outdir, "fig_gradsub_diag")
     plt.close(fig)
