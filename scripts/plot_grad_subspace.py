@@ -149,6 +149,55 @@ def fig_proj(jsonpath, outdir):
     plt.close(fig)
 
 
+def fig_B_lp(jsonpath, outdir):
+    """B 的 层(32) x 投影(7) 热力图：色 = 子空间重叠（上排 subL/输出侧，下排 subR/输入侧）。"""
+    import json
+    import re
+    d = json.load(open(jsonpath))
+    projs = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8.6))
+    rows = (("subL_mm_um", "subL (left/column-output side)"),
+            ("subR_mm_um", "subR (right/row-input side)"))
+    ims = {}
+    for r, (key, ttl) in enumerate(rows):
+        mats, vmax = [], 0.0
+        for ti in (0, 1, 2):
+            M = np.full((32, len(projs)), np.nan)
+            for n, v in d["per_target"][ti]["modules"].items():
+                m = re.search(r"layers\.(\d+)\.", n)
+                if not m:
+                    continue
+                L = int(m.group(1))
+                if not 0 <= L < 32:
+                    continue
+                for j, p in enumerate(projs):
+                    if n.endswith(p):
+                        M[L, j] = v[key]
+            mats.append(M)
+            vmax = max(vmax, np.nanmax(M))
+        for c, ti in enumerate((0, 1, 2)):
+            ax = axes[r, c]
+            ims[(r, c)] = ax.imshow(mats[c], aspect="auto", origin="lower", cmap="viridis",
+                                    vmin=0, vmax=vmax)
+            ax.set_xticks(range(len(projs)))
+            ax.set_xticklabels([p.replace("_proj", "") for p in projs], fontsize=8)
+            ax.set_yticks([0, 8, 16, 24, 31])
+            if c == 0:
+                ax.set_ylabel("layer")
+            ax.set_title(f"{ttl}  (pair {ti})", fontsize=9)
+            if r == 1:
+                ax.set_xlabel("projection")
+    fig.suptitle("B: subspace overlap, layer x projection "
+                 "(top = subL/left/output, bottom = subR/right/input)", fontsize=12)
+    fig.tight_layout(rect=(0, 0, 0.90, 0.94))
+    cax1 = fig.add_axes([0.915, 0.55, 0.012, 0.33])
+    fig.colorbar(ims[(0, 2)], cax=cax1).set_label("subL overlap", size=8)
+    cax2 = fig.add_axes([0.915, 0.11, 0.012, 0.33])
+    fig.colorbar(ims[(1, 2)], cax=cax2).set_label("subR overlap", size=8)
+    save(fig, outdir, "fig_gradsub_B_lp")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--emaps", default="../product/results/_analysis/grad_subspace_emaps.npz")
@@ -222,6 +271,7 @@ def main():
     fig_A(args.json_path, args.outdir)
     fig_B(args.json_path, args.outdir)
     fig_proj(args.json_path, args.outdir)
+    fig_B_lp(args.json_path, args.outdir)
     print("saved fig_gradsub_emaps/diag/A_emaps/B_layers to", args.outdir)
 
 
