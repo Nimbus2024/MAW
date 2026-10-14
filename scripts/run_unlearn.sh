@@ -145,7 +145,11 @@ PY
 fi
 
 if [ "${DO_EVAL}" = "1" ]; then
-  for epoch_model in "${RUN_DIR}"/runs/epoch-*/model; do
+  mapfile -t EPOCH_MODELS < <(ls -d "${RUN_DIR}"/runs/epoch-*/model 2>/dev/null | sort -V)
+  if [ -n "${EVAL_LAST_N:-}" ]; then
+    EPOCH_MODELS=( "${EPOCH_MODELS[@]: -${EVAL_LAST_N}}" )
+  fi
+  for epoch_model in "${EPOCH_MODELS[@]}"; do
     [ -d "${epoch_model}" ] || continue
     local_epoch="$(basename "$(dirname "${epoch_model}")")"
     eval_adapter "${epoch_model}" \
