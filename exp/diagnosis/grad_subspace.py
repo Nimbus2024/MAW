@@ -267,7 +267,7 @@ def main():
                 rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
                 rec["lay"] = lay
                 if _m == "mm":
-                    rec["raw"] = gw.half().cpu()
+                    rec["raw"] = gw.cpu()
                 else:
                     gm = diags["mm"][_ti][n]["raw"].to(gw.device).float()
                     rec["cos_raw"] = float((gm * gw).sum()
@@ -291,6 +291,7 @@ def main():
         for n in names:
             em, eu = diags["mm"][ti][n], diags["um"][ti][n]
             r = {"cos_diag": cosine(em["diag"], eu["diag"]),
+                 "cos_raw": eu.get("cos_raw"),
                  "offdiag_mm": 1 - em["dnorm2"] / em["frob2"] if em["frob2"] > 0 else None,
                  "offdiag_um": 1 - eu["dnorm2"] / eu["frob2"] if eu["frob2"] > 0 else None}
             Um, Vm = em["Ug"].float(), em["Vg"].float()
