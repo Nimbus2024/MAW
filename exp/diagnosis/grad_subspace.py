@@ -78,8 +78,13 @@ def require_input_grad(model):
 
 
 def grad_of_W(a, d, pos_mask):
-    """a:[1,T,din], d:[1,T,dout], pos_mask:[1,T] -> gW:[dout,din] (float32)."""
-    return torch.einsum("bte,btf,bt->ef", d.float(), a.float(), pos_mask.float())
+    """a:[1,T,din], d:[1,T,dout], pos_mask:[1,T] -> gW:[dout,din] (float32).
+
+    用 (masked d)^T @ a 单次 matmul, 避免 einsum 物化 [T,dout,din] 的巨型中间量。
+    """
+    dm = d.float() * pos_mask.float().unsqueeze(-1)      # [1,T,dout]
+    gw = dm.transpose(1, 2) @ a.float()                  # [1,dout,T]@[1,T,din] -> [1,dout,din]
+    return gw.squeeze(0)
 
 
 def answer_ce(model, ids, attn, pixel, labels):
