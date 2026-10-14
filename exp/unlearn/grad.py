@@ -20,14 +20,14 @@ def make_groups(module, scope):
     params = trainable_params(module)
     if scope == "global":
         return params, [list(range(len(params)))]
-    name_to_idx = {}
-    for i, (n, p) in enumerate(module.named_parameters()):
-        if p.requires_grad:
-            name_to_idx[n] = i
     buckets = {}
-    for n, idx in name_to_idx.items():
+    idx = 0
+    for n, p in module.named_parameters():
+        if not p.requires_grad:
+            continue
         m = _LAYER_RE.search(n)
         buckets.setdefault(m.group(0) if m else "other", []).append(idx)
+        idx += 1
     return params, list(buckets.values())
 
 
