@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -110,11 +111,17 @@ def one_pass(model, grabber, pair, modality, device, processor, max_length):
     ids, attn, pixel, labels = batch_to_device(batch, modality, device)
     grabber.clear()
     model.zero_grad(set_to_none=True)
+    t0 = time.time()
     loss = answer_ce(model, ids, attn, pixel, labels)
+    t1 = time.time()
     loss.backward()
+    t2 = time.time()
     pos = answer_pos_mask(labels)
     out = {n: grad_of_W(grabber.a[n], grabber.d[n], pos).cpu().float().numpy()
            for n in grabber.a if n in grabber.d}
+    t3 = time.time()
+    if getattr(one_pass, "_timing", False):
+        print(f"    fwd={t1-t0:.2f}s bwd={t2-t1:.2f}s copy={t3-t2:.2f}s", flush=True)
     return out, float(loss.item())
 
 
@@ -160,9 +167,11 @@ def main():
     ap.add_argument("--max_length", type=int, default=768)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--cache_basis", default="", help="W 的 SVD 基缓存 .pt 路径")
+    ap.add_argument("--timing", action="store_true")
     args = ap.parse_args()
 
     torch.set_grad_enabled(True)
+    one_pass._timing = args.timing
     processor = AutoProcessor.from_pretrained(args.base, local_files_only=True)
     processor.num_additional_image_tokens = 1
     model = LlavaForConditionalGeneration.from_pretrained(
