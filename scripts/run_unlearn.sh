@@ -50,10 +50,12 @@ LABEL="${METHOD}"
 # 评估输出文件名不能用 '/'，统一换成 '-'
 LABEL_FILE="${METHOD//\//-}"
 
-# 每进程数: MAW 组默认 4 卡 DDP; MAW_SINGLE=1 时单进程 auto-shard
+# 每进程数: 默认单进程; 4 卡组用 UNLEARN_NPROC/MAW_NPROC 跑 DDP(大 GBS)
 NPROC=1
 if [ "${GROUP}" = "maw" ]; then
   [ "${MAW_SINGLE:-0}" = "1" ] && NPROC=1 || NPROC="${MAW_NPROC:-4}"
+else
+  NPROC="${UNLEARN_NPROC:-1}"
 fi
 GBS="${GBS:-}"
 if [[ -n "${GBS}" ]]; then
@@ -120,8 +122,8 @@ if [ "${GROUP}" = "maw" ]; then
 fi
 (
   cd "${CODE_ROOT}"
-  if [ "${GROUP}" = "maw" ] && [ "${MAW_SINGLE:-0}" != "1" ]; then
-    "${PYTHON}" -m accelerate.commands.launch --num_processes "${MAW_NPROC:-4}" \
+  if [ "${NPROC}" -gt 1 ]; then
+    "${PYTHON}" -m accelerate.commands.launch --num_processes "${NPROC}" \
       -m exp.unlearn.framework "${FW_ARGS[@]}" "${TRAIN_ARGS[@]}"
   else
     "${PYTHON}" -m exp.unlearn.framework "${FW_ARGS[@]}" "${TRAIN_ARGS[@]}"
