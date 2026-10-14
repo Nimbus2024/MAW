@@ -152,8 +152,12 @@ def main():
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--cache_basis", default="")
     ap.add_argument("--timing", action="store_true")
+    ap.add_argument("--save_C_layers", default="8,16,24,31")
+    ap.add_argument("--r_sub", type=int, default=16)
+    ap.add_argument("--emap_out", default="")
     args = ap.parse_args()
     torch.set_grad_enabled(True)
+    saveC = set(x.strip() for x in args.save_C_layers.split(',') if x.strip())
 
     processor = AutoProcessor.from_pretrained(args.base, local_files_only=True)
     processor.num_additional_image_tokens = 1
@@ -228,8 +232,18 @@ def main():
                 U = U.to(gthr.device)
                 V = V.to(gthr.device)
                 C = U.t() @ gthr @ V
-                d = torch.diagonal(C).cpu()
-                _e[n] = (d, float((d * d).sum()), float((gthr * gthr).sum()))
+                d = torch.diagonal(C)
+                rec = {"diag": d.detach().float().cpu(),
+                       "dnorm2": float((d * d).sum()),
+                       "frob2": float((gthr * gthr).sum()),
+                       "shape": (int(gthr.shape[0]), int(gthr.shape[1]))}
+                Ug, Sg, Vg = torch.svd_lowrank(gthr, q=args.r_sub)
+                rec["Ug"] = Ug.detach().half().cpu()
+                rec["Vg"] = Vg.detach().half().cpu()
+                lay = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
+                if lay in saveC:
+                    rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
+                _e[n] = rec
 
             run_pass(model, grabber, p, m, args.device, processor,
                      args.max_length, acc_target, args.timing)
@@ -245,14 +259,22 @@ def main():
     for ti in range(len(targets)):
         rec = {}
         for n in names:
-            dm, nm2, fm2 = diags["mm"][ti][n]
-            du, nu2, fu2 = diags["um"][ti][n]
-            r = {"cos_diag": cosine(dm, du),
-                 "offdiag_mm": 1 - nm2 / fm2 if fm2 > 0 else None,
-                 "offdiag_um": 1 - nu2 / fu2 if fu2 > 0 else None}
+            em, eu = diags["mm"][ti][n], diags["um"][ti][n]
+            r = {"cos_diag": cosine(em["diag"], eu["diag"]),
+                 "offdiag_mm": 1 - em["dnorm2"] / em["frob2"] if em["frob2"] > 0 else None,
+                 "offdiag_um": 1 - eu["dnorm2"] / eu["frob2"] if eu["frob2"] > 0 else None}
+            Um, Vm = em["Ug"].float(), em["Vg"].float()
+            Uu, Vu = eu["Ug"].float(), eu["Vg"].float()
+            k = Um.shape[1]
+            r["subL_mm_um"] = float((Um.t() @ Uu).pow(2).sum()) / k
+            r["subR_mm_um"] = float((Vm.t() @ Vu).pow(2).sum()) / k
+            r["subL_rand"] = k / em["shape"][0]
+            r["subR_rand"] = k / em["shape"][1]
             if ti > 0:
-                d0 = diags["mm"][0][n][0]
-                r["cos_diag_cross_it"] = cosine(dm, d0)
+                e0 = diags["mm"][0][n]
+                r["cos_diag_cross_it"] = cosine(em["diag"], e0["diag"])
+                U0 = e0["Ug"].float()
+                r["subL_it_i0"] = float((Um.t() @ U0).pow(2).sum()) / k
             rec[n] = r
         out["per_target"].append({"index": ti, "modules": rec})
         lay = {}
@@ -261,16 +283,21 @@ def main():
             lay.setdefault(L, []).append(r)
         for L, rs in lay.items():
             agg = {}
-            for key in ("cos_diag", "offdiag_mm", "offdiag_um", "cos_diag_cross_it"):
+            for key in ("cos_diag", "offdiag_mm", "offdiag_um", "cos_diag_cross_it",
+                        "subL_mm_um", "subR_mm_um", "subL_rand", "subR_rand", "subL_it_i0"):
                 vals = [x[key] for x in rs if x.get(key) is not None]
                 if vals:
                     agg[key] = float(np.mean(vals))
             out["per_layer"].setdefault(L, {})[str(ti)] = agg
         mc = float(np.mean([r["cos_diag"] for r in rec.values()]))
         mo = float(np.mean([r["offdiag_mm"] for r in rec.values() if r["offdiag_mm"] is not None]))
-        msg = f"target {ti}: mean cos_diag(mm,um)={mc:.3f}  mean offdiag_mm={mo:.3f}"
+        sl = np.mean([r["subL_mm_um"] for r in rec.values()])
+        sr = np.mean([r["subR_mm_um"] for r in rec.values()])
+        rl = np.mean([r["subL_rand"] for r in rec.values()])
+        msg = (f"target {ti}: cos_diag(mm,um)={mc:.3f} offdiag_mm={mo:.3f} | "
+               f"subL(mm,um)={sl:.3f} (rand {rl:.4f}) subR={sr:.3f}")
         if ti > 0:
-            msg += f"  | cross IT={np.mean([r['cos_diag_cross_it'] for r in rec.values()]):.3f}"
+            msg += f" | subL(IT_i,IT_0)={np.mean([r['subL_it_i0'] for r in rec.values()]):.3f}"
         print(msg, flush=True)
 
     grabber.remove()
@@ -278,6 +305,15 @@ def main():
     outp = Path(args.output)
     outp.parent.mkdir(parents=True, exist_ok=True)
     outp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    if args.emap_out:
+        arrs = {}
+        for m in ("mm", "um"):
+            for ti in range(len(targets)):
+                for n, e in diags[m][ti].items():
+                    if "E" in e:
+                        arrs[f"{m}|{ti}|{n}"] = e["E"]
+        np.savez_compressed(args.emap_out, **arrs)
+        print(f"emaps: {args.emap_out} ({len(arrs)} maps)", flush=True)
     print(f"saved: {outp}")
 
 
