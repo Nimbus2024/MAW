@@ -28,6 +28,7 @@ from accelerate.utils import DistributedDataParallelKwargs
 from tqdm import tqdm
 
 from .. import _paths
+from . import grad
 from ._common import (
     find_all_linear_names, load_model_and_processor, set_global_seed,
 )
@@ -109,7 +110,11 @@ def main(args):
         optimizer, dl_forget, dl_retain, lr_scheduler = prepared
 
     need_w = objective.needs_w or controller.needs_margin
+    # 梯度归一组（balance 用）；alternate 只需 params 做范数诊断
+    base_model = accelerator.unwrap_model(model)
+    train_params, grad_groups = grad.make_groups(base_model, args.grad_norm_scope)
     print(f"== objective={args.objective} group={args.group} gamma_mode={args.gamma_mode} "
+          f"grad_mode={args.grad_mode}/{args.grad_norm_scope} "
           f"needs_ref={objective.needs_ref} need_w={need_w} lambda={args.lmbda} ==")
 
     stop_training = False
@@ -140,24 +145,77 @@ def main(args):
                 gap = 0.0
                 step_log["gamma"] = gamma
 
-            loss_forget = 2.0 * ((1.0 - gamma) * loss_mm + gamma * loss_um)
-            accelerator.backward(loss_forget)
+            ret_mm, ret_um = pair_retain["mm"], pair_retain["um"]
 
-            step_total = loss_forget.item()
-            if args.lmbda > 0:
-                ret_mm, ret_um = pair_retain["mm"], pair_retain["um"]
-                loss_ret_mm = compute_retain_kl(model, ref_model, ret_mm)
-                accelerator.backward(args.lmbda * loss_ret_mm)
-                loss_ret_um = compute_retain_kl(model, ref_model, ret_um)
-                accelerator.backward(args.lmbda * loss_ret_um)
-                step_log["l_ret_mm"] = loss_ret_mm.item()
-                step_log["l_ret_um"] = loss_ret_um.item()
-                step_total += args.lmbda * (loss_ret_mm.item() + loss_ret_um.item())
-
-            accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            optimizer.zero_grad()
-            lr_scheduler.step()
+            if args.grad_mode == "weighted_sum":
+                loss_forget = 2.0 * ((1.0 - gamma) * loss_mm + gamma * loss_um)
+                accelerator.backward(loss_forget)
+                step_total = loss_forget.item()
+                if args.lmbda > 0:
+                    l_ret = compute_retain_kl(model, ref_model, ret_mm)
+                    u_ret = compute_retain_kl(model, ref_model, ret_um)
+                    ret = args.lmbda * (l_ret + u_ret)
+                    accelerator.backward(ret)
+                    step_log["l_ret_mm"] = l_ret.item()
+                    step_log["l_ret_um"] = u_ret.item()
+                    step_total += ret.item()
+                accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                lr_scheduler.step()
+            elif args.grad_mode == "balance":
+                accelerator.backward(loss_mm)
+                snap = grad.snapshot(train_params)
+                accelerator.backward(loss_um)
+                n_mm, n_um, cos = grad.stats(train_params, snap)
+                grad.write_balanced(train_params, snap, grad_groups,
+                                    1.0 - gamma, gamma, args.grad_norm_eps)
+                step_log.update(g_norm_mm=n_mm, g_norm_um=n_um, g_cos=cos)
+                step_total = loss_mm.item() + loss_um.item()
+                if args.lmbda > 0:
+                    l_ret = compute_retain_kl(model, ref_model, ret_mm)
+                    u_ret = compute_retain_kl(model, ref_model, ret_um)
+                    ret = args.lmbda * (l_ret + u_ret)
+                    accelerator.backward(ret)
+                    step_log["l_ret_mm"] = l_ret.item()
+                    step_log["l_ret_um"] = u_ret.item()
+                    step_total += ret.item()
+                accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                lr_scheduler.step()
+            else:
+                base_lr = optimizer.param_groups[0]["lr"]
+                step_total = 0.0
+                if 1.0 - gamma > 0:
+                    grad.set_lr(optimizer, base_lr * (1.0 - gamma))
+                    accelerator.backward(loss_mm)
+                    step_log["g_norm_mm"] = grad.global_norm(train_params)
+                    accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    step_total += loss_mm.item()
+                if gamma > 0:
+                    grad.set_lr(optimizer, base_lr * gamma)
+                    accelerator.backward(loss_um)
+                    step_log["g_norm_um"] = grad.global_norm(train_params)
+                    accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    step_total += loss_um.item()
+                if args.lmbda > 0:
+                    grad.set_lr(optimizer, base_lr)
+                    l_ret = compute_retain_kl(model, ref_model, ret_mm)
+                    u_ret = compute_retain_kl(model, ref_model, ret_um)
+                    ret = args.lmbda * (l_ret + u_ret)
+                    accelerator.backward(ret)
+                    step_log["l_ret_mm"] = l_ret.item()
+                    step_log["l_ret_um"] = u_ret.item()
+                    accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    step_total += ret.item()
+                lr_scheduler.step()
 
             total_loss += step_total
             if writer is not None:
@@ -172,6 +230,9 @@ def main(args):
                     writer.add_scalar("controller/alpha_s", info["alpha_s"], global_step)
                     writer.add_scalar("controller/level_ema", info["level_ema"], global_step)
                     writer.add_scalar("controller/s_hat", info["s_hat"], global_step)
+                for k in ("g_norm_mm", "g_norm_um", "g_cos"):
+                    if k in step_log:
+                        writer.add_scalar(f"grad/{k[2:]}", step_log[k], global_step)
             global_step += 1
             progress.set_postfix({k: (f"{v:.4f}" if isinstance(v, float) else v)
                                   for k, v in step_log.items()})
@@ -257,6 +318,13 @@ def build_parser():
     parser.add_argument("--bias_correct", choices=("on", "off"), default="on")
     # retain
     parser.add_argument("--lmbda", type=float, default=1.5, help="retain KL 权重（可搜）")
+    parser.add_argument("--grad_mode", choices=("weighted_sum", "balance", "alternate"),
+                        default="weighted_sum",
+                        help="weighted_sum=loss 加权; balance=各模态梯度归一后相加; "
+                             "alternate=mm/um 分别 backward+step（γ 作步长分配）")
+    parser.add_argument("--grad_norm_scope", choices=("layer", "global"), default="layer",
+                        help="balance 模式的归一尺度：逐层 or 全局")
+    parser.add_argument("--grad_norm_eps", type=float, default=1e-12)
     return parser
 
 
