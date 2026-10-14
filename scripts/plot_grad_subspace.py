@@ -48,38 +48,32 @@ def _spearman(x, y):
     return float(rx @ ry / d) if d > 0 else float("nan")
 
 
-def fig_A(jsonpath, outdir, ti=1, q=1.0):
-    """A 方案：完整能量图 |C|^2 的 support(Jaccard) 与能量图相关(Spearman)，逐层 + 基线。"""
+def fig_A(jsonpath, outdir, q=1.0):
+    """A 方案：完整能量图 |C|^2 的 support(Jaccard) 与能量图相关(Spearman)，3 个 pair 逐层。"""
     import json
     d = json.load(open(jsonpath))
     pl = d["per_layer"]
     layers = sorted(int(k) for k in pl)
-
-    def col(key):
-        return [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
-
-    J, R = col("jaccard_mm_um"), col("spearman_mm_um")
-    Jc, Rc = col("jaccard_cross_it"), col("spearman_cross_it")
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
-    x = np.arange(len(layers))
-    axes[0].bar(x - 0.2, J, 0.4, color="#d62728", label="mm vs um (same pair)")
-    if any(v is not None for v in Jc):
-        axes[0].bar(x + 0.2, Jc, 0.4, color="#555555", label="IT$_i$ vs IT$_0$ (diff. pair)")
-    axes[0].axhline(q / 100.0, ls=":", color="gray", label="random (=$q$)")
-    axes[1].bar(x - 0.2, R, 0.4, color="#d62728")
-    if any(v is not None for v in Rc):
-        axes[1].bar(x + 0.2, Rc, 0.4, color="#555555")
-    for ax, ttl, yl in ((axes[0], "support overlap (top-%g%% Jaccard)" % q, "Jaccard"),
-                        (axes[1], "energy-map correlation (Spearman)", r"$\rho$")):
-        ax.set_xticks(x[::2])
-        ax.set_xticklabels([f"L{L}" for L in layers[::2]])
+    for ax, key, ckey, ttl, yl, rnd in (
+            (axes[0], "jaccard_mm_um", "jaccard_cross_it",
+             "support overlap (top-%g%% Jaccard)" % q, "Jaccard", q / 100.0),
+            (axes[1], "spearman_mm_um", "spearman_cross_it",
+             "energy-map correlation (Spearman)", r"$\rho$", 0.0)):
+        for ti, col in ((0, "#1f77b4"), (1, "#d62728"), (2, "#2ca02c")):
+            y = [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
+            ax.plot(layers, y, "-o", ms=2.6, lw=1.4, color=col, label=f"mm vs um (pair {ti})")
+        yc = [pl[str(L)].get("1", {}).get(ckey) for L in layers]
+        if any(v is not None for v in yc):
+            ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
+        ax.axhline(rnd, ls=":", color="gray", lw=1.2, label=f"random (={rnd:g})")
         ax.set_xlabel("layer index")
         ax.set_ylabel(yl)
         ax.set_title("A: " + ttl)
-        ax.grid(alpha=0.3, axis="y")
+        ax.grid(alpha=0.3)
     axes[0].legend(frameon=False, fontsize=8)
-    fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis (target pair %d)" % ti, fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis  (all 3 target pairs)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     save(fig, outdir, "fig_gradsub_A_emaps")
     plt.close(fig)
 
@@ -185,7 +179,7 @@ def main():
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     save(fig, args.outdir, "fig_gradsub_diag")
     plt.close(fig)
-    fig_A(args.json_path, args.outdir, ti=1)
+    fig_A(args.json_path, args.outdir)
     fig_B(args.json_path, args.outdir)
     print("saved fig_gradsub_emaps/diag/A_emaps/B_layers to", args.outdir)
 
