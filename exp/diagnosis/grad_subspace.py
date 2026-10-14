@@ -35,6 +35,12 @@ TARGET = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_
 SKIP = ("multi_modal_projector", "vision_model", "vision_tower", "vision")
 
 
+def _mem(tag):
+    if torch.cuda.is_available():
+        print(f"  [mem {tag}] alloc={torch.cuda.memory_allocated()/1e9:.1f}GB "
+              f"reserved={torch.cuda.memory_reserved()/1e9:.1f}GB", flush=True)
+
+
 def collect_modules(model):
     mods = {}
     for name, m in model.named_modules():
@@ -155,6 +161,7 @@ def main():
         p.requires_grad_(False)
     emb_hook = require_input_grad(model)
 
+    _mem('model-loaded')
     modules = collect_modules(model)
     names = list(modules)
     print(f"linear modules: {len(names)}", flush=True)
@@ -180,12 +187,14 @@ def main():
             basis[n] = (U.contiguous(), V.contiguous())
         if cache_path:
             torch.save(basis, cache_path)
+    _mem('basis')
     print("basis ready", flush=True)
 
     diags = {}   # diags[m][ti][name] = (diag[K], dnorm2, frob2) on cpu
     for m in ("mm", "um"):
         vhat = {n: torch.zeros(modules[n].weight.shape, dtype=torch.float32,
                                device=args.device) for n in names}
+        _mem(f'vhat-{m}')
 
         def acc_ref(n, gw, _v=vhat):
             _v[n].add_(gw * gw)
@@ -193,6 +202,8 @@ def main():
         for si, p in enumerate(refs):
             run_pass(model, grabber, p, m, args.device, processor,
                      args.max_length, acc_ref, args.timing)
+            if si == 0:
+                _mem(f'ref-{m}-pass1')
             if (si + 1) % 5 == 0:
                 print(f"  ref {m} {si+1}/{len(refs)}", flush=True)
         for n in names:
