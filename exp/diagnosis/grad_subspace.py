@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""X1: 逐参数梯度在 W 的（截断）奇异基下的能量谱 / 支撑重叠 (mm vs um)。
+"""X1: 逐参数梯度在 W 的（截断）奇异基下 的 对角余弦 + 非对角能量占比。
 
-对每个线性层 W (attn & ffn，共 32 层 x 7 投影):
-  1) 逐样本的逐参数梯度  gW = dL/dW = sum_{t in answer} delta_t (x) a_t
-     （a = 该层输入激活, delta = 该层输出梯度; 只累加答案 token 位置）
-  2) 逐模态各自在参考集上估 RMS:  vhat_m[entry] = mean_s (gW_{s,m}[entry])^2
-     Adam 式归一:  ghat = gW / (sqrt(vhat_m) + eps)
-  3) top-k% 阈值 -> 稀疏 gW_thr (与 W 同形)
-  4) 用 W 的截断 SVD 基 (U_K, V_K) 得系数图  C = U_K^T gW_thr V_K
-  5) 指标: 能量图 E = |C|^2 的 top-q% Jaccard + Spearman(vec E_mm, vec E_um)
-     基线: (a) 随机 top-k% 掩码; (b) 异题同模态 (IT_i vs IT_j)
+对每个线性层 W (LM 的 attn & ffn，即挂 LoRA 的 224 个矩阵):
+  1) 逐样本梯度  gW = dL/dW = (masked delta)^T @ a      (只累加答案 token)
+  2) 该模态在参考集上的逐条目 RMS:  vhat[entry] = sqrt(mean_s gW^2) + eps
+     Adam 式逐参数归一:  ghat = gW / vhat
+  3) top-k% 阈值 -> 稀疏 gW_thr
+  4) W 的截断 SVD 基 (U_K,V_K):  C = U_K^T gW_thr V_K   (K x K)
+  5) 指标 (逐矩阵 + 逐层聚合):
+       cos_diag  = cos( diag(C_mm), diag(C_um) )
+       offdiag_m = 1 - ||diag(C_m)||^2 / ||C_m||_F^2
+     基线: 异题同模态 cos( diag(C_it_i), diag(C_it_0) )
 
 损失 = 答案 token 的 CE; 模型 = base(origin) 冻结; 仅让输入嵌入输出 require grad 以建图。
+张量与 RMS 累加全程留在 GPU（仅最后搬小向量/标量），避免 ~26GB/pass 的 PCIe 拷贝。
 """
 from __future__ import annotations
 
@@ -52,12 +54,12 @@ class Grabber:
 
     def _mk_fwd(self, name):
         def hook(mod, inp, out):
-            self.a[name] = inp[0].detach()
+            self.a[name] = inp[0]
         return hook
 
     def _mk_bwd(self, name):
         def hook(mod, gin, gout):
-            self.d[name] = gout[0].detach()
+            self.d[name] = gout[0]
         return hook
 
     def clear(self):
@@ -79,13 +81,8 @@ def require_input_grad(model):
 
 
 def grad_of_W(a, d, pos_mask):
-    """a:[1,T,din], d:[1,T,dout], pos_mask:[1,T] -> gW:[dout,din] (float32).
-
-    用 (masked d)^T @ a 单次 matmul, 避免 einsum 物化 [T,dout,din] 的巨型中间量。
-    """
-    dm = d.float() * pos_mask.float().unsqueeze(-1)      # [1,T,dout]
-    gw = dm.transpose(1, 2) @ a.float()                  # [1,dout,T]@[1,T,din] -> [1,dout,din]
-    return gw.squeeze(0)
+    dm = d.float() * pos_mask.float().unsqueeze(-1)
+    return (dm.transpose(1, 2) @ a.float()).squeeze(0)
 
 
 def answer_ce(model, ids, attn, pixel, labels):
@@ -103,7 +100,7 @@ def answer_pos_mask(labels):
 
 
 @torch.enable_grad()
-def one_pass(model, grabber, pair, modality, device, processor, max_length):
+def one_pass(model, grabber, pair, modality, device, processor, max_length, timing=False):
     item = {"image": pair["image"] if modality == "mm" else None,
             "question": pair["mm_q"] if modality == "mm" else pair["um_q"],
             "answer": pair["mm_a"] if modality == "mm" else pair["um_a"]}
@@ -117,39 +114,11 @@ def one_pass(model, grabber, pair, modality, device, processor, max_length):
     loss.backward()
     t2 = time.time()
     pos = answer_pos_mask(labels)
-    out = {n: grad_of_W(grabber.a[n], grabber.d[n], pos).cpu().float().numpy()
-           for n in grabber.a if n in grabber.d}
-    t3 = time.time()
-    if getattr(one_pass, "_timing", False):
-        print(f"    fwd={t1-t0:.2f}s bwd={t2-t1:.2f}s copy={t3-t2:.2f}s", flush=True)
+    out = {n: grad_of_W(grabber.a[n], grabber.d[n], pos) for n in grabber.a if n in grabber.d}
+    grabber.clear()
+    if timing:
+        print(f"    fwd={t1-t0:.2f} bwd={t2-t1:.2f} dW={time.time()-t2:.2f}", flush=True)
     return out, float(loss.item())
-
-
-def svd_basis(W, K):
-    U, S, V = torch.svd_lowrank(W.float(), q=K)
-    return U.cpu(), V.cpu()
-
-
-def top_q(mask_vals, q_pct):
-    n = mask_vals.numel()
-    k = max(1, int(round(q_pct / 100.0 * n)))
-    thr = torch.topk(mask_vals.reshape(-1), k).values.min()
-    return (mask_vals.reshape(-1) >= thr)
-
-
-def jaccard(x, y):
-    i = int((x & y).sum())
-    u = int((x | y).sum())
-    return i / u if u else float("nan")
-
-
-def spearman(x, y):
-    rx = x.argsort().argsort().float()
-    ry = y.argsort().argsort().float()
-    rx = rx - rx.mean()
-    ry = ry - ry.mean()
-    d = rx.norm() * ry.norm()
-    return float((rx * ry).sum() / d) if d > 0 else float("nan")
 
 
 def main():
@@ -160,18 +129,16 @@ def main():
     ap.add_argument("--forget_split", default="forget_5")
     ap.add_argument("--n_target", type=int, default=3)
     ap.add_argument("--n_ref", type=int, default=50)
-    ap.add_argument("--k", type=float, default=1.0, help="top-k%% 阈值")
-    ap.add_argument("--q", type=float, default=1.0, help="能量图 top-q%% 用于 Jaccard")
-    ap.add_argument("--K", type=int, default=256, help="截断 SVD 秩")
+    ap.add_argument("--k", type=float, default=1.0)
+    ap.add_argument("--K", type=int, default=256)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max_length", type=int, default=768)
     ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--cache_basis", default="", help="W 的 SVD 基缓存 .pt 路径")
+    ap.add_argument("--cache_basis", default="")
     ap.add_argument("--timing", action="store_true")
     args = ap.parse_args()
-
     torch.set_grad_enabled(True)
-    one_pass._timing = args.timing
+
     processor = AutoProcessor.from_pretrained(args.base, local_files_only=True)
     processor.num_additional_image_tokens = 1
     model = LlavaForConditionalGeneration.from_pretrained(
@@ -183,7 +150,8 @@ def main():
     emb_hook = require_input_grad(model)
 
     modules = collect_modules(model)
-    print(f"linear modules: {len(modules)}", flush=True)
+    names = list(modules)
+    print(f"linear modules: {len(names)}", flush=True)
     grabber = Grabber(modules)
 
     df = pd.read_parquet(Path(args.data_split_dir) / args.forget_split
@@ -194,93 +162,92 @@ def main():
     refs = [pairs[i] for i in order[:args.n_ref]]
     print(f"pairs={len(pairs)} targets={len(targets)} refs={len(refs)}", flush=True)
 
-    # ---- phase 1: reference second moment (per modality) ----
-    vhat = {m: {n: None for n in modules} for m in ("mm", "um")}
-    for m in ("mm", "um"):
-        for si, p in enumerate(refs):
-            g, _ = one_pass(model, grabber, p, m, args.device, processor, args.max_length)
-            for n, w in g.items():
-                vhat[m][n] = w * w if vhat[m][n] is None else vhat[m][n] + w * w
-            if (si + 1) % 10 == 0:
-                print(f"  ref {m} {si+1}/{len(refs)}", flush=True)
-        for n in modules:
-            vhat[m][n] = np.sqrt(vhat[m][n] / len(refs)) + 1e-8
-
-    # ---- phase 2: target samples (mm / um / cross-question IT) ----
-    targets_g = []
-    for si, p in enumerate(targets):
-        gm, _ = one_pass(model, grabber, p, "mm", args.device, processor, args.max_length)
-        gu, _ = one_pass(model, grabber, p, "um", args.device, processor, args.max_length)
-        gc = None if si == 0 else targets_g[0]["mm"]  # 异题同模态基线: IT_0 vs IT_i
-        targets_g.append({"mm": gm, "um": gu, "cross": gc})
-        print(f"  target {si+1}/{len(targets)} done", flush=True)
-
-    # ---- W's truncated SVD basis (cached) ----
+    # W 截断 SVD 基（缓存）
     cache_path = Path(args.cache_basis) if args.cache_basis else None
-    basis = {}
     if cache_path and cache_path.exists():
         basis = torch.load(cache_path, map_location="cpu")
-        print("basis loaded from cache", flush=True)
+        print("basis from cache", flush=True)
     else:
+        basis = {}
         for n, mod in modules.items():
-            U, V = svd_basis(mod.weight.detach(), args.K)
-            basis[n] = (U, V)
+            U, V = torch.svd_lowrank(mod.weight.detach().float(), q=args.K)
+            basis[n] = (U.contiguous(), V.contiguous())
         if cache_path:
             torch.save(basis, cache_path)
     print("basis ready", flush=True)
 
-    # ---- metrics per module ----
-    def energy(gW, n, m):
-        U, V = basis[n]
-        gh = gW / vhat[m][n] if gW is not None else None
-        if gh is None:
-            return None
-        thr = np.partition(np.abs(gh).ravel(), -max(1, int(round(args.k / 100 * gh.size))))[
-            -max(1, int(round(args.k / 100 * gh.size)))]
-        gthr = np.where(np.abs(gh) >= thr, gh, 0.0)
-        C = U.T.numpy() @ gthr @ V.numpy()
-        return torch.from_numpy(C * C)  # E = |C|^2
+    diags = {}   # diags[m][ti][name] = (diag[K], dnorm2, frob2) on cpu
+    for m in ("mm", "um"):
+        vhat = {n: torch.zeros(modules[n].weight.shape, dtype=torch.float32,
+                               device=args.device) for n in names}
+        for si, p in enumerate(refs):
+            g, _ = one_pass(model, grabber, p, m, args.device, processor,
+                            args.max_length, args.timing)
+            for n, w in g.items():
+                vhat[n].add_(w * w)
+            del g
+            if (si + 1) % 5 == 0:
+                print(f"  ref {m} {si+1}/{len(refs)}", flush=True)
+        for n in names:
+            vhat[n] = vhat[n].sqrt_().div_(np.sqrt(len(refs))).add_(1e-8)
+        print(f"  vhat[{m}] ready", flush=True)
+        diags[m] = []
+        for ti, p in enumerate(targets):
+            g, _ = one_pass(model, grabber, p, m, args.device, processor,
+                            args.max_length, args.timing)
+            entry = {}
+            for n in names:
+                gh = g[n] / vhat[n]
+                flat = gh.abs().reshape(-1)
+                kk = max(1, int(round(args.k / 100.0 * flat.numel())))
+                thr = torch.topk(flat, kk).values.min()
+                gthr = torch.where(gh.abs() >= thr, gh, torch.zeros_like(gh))
+                U, V = basis[n]
+                U = U.to(gthr.device)
+                V = V.to(gthr.device)
+                C = U.t() @ gthr @ V
+                d = torch.diagonal(C).cpu()
+                entry[n] = (d, float((d * d).sum()), float((gthr * gthr).sum()))
+            del g
+            diags[m].append(entry)
+            print(f"  target {m} {ti+1}/{len(targets)}", flush=True)
+        del vhat
 
-    out = {"config": vars(args), "per_layer": {}, "per_module": {}, "targets": []}
-    layer_names = sorted({n.split(".layers.")[1].split(".")[0] for n in modules
-                          if ".layers." in n}, key=int)
-    for ti, tg in enumerate(targets_g):
-        rec = {"index": ti, "modules": {}}
-        acc = {}
-        for n in modules:
-            Emm = energy(tg["mm"][n], n, "mm")
-            Eum = energy(tg["um"][n], n, "um")
-            Ecr = energy(tg["cross"][n], n, "mm") if tg["cross"] else None
-            rand = torch.rand_like(Eum)
-            r = {}
-            if Emm is not None and Eum is not None:
-                bmm, bum = top_q(Emm, args.q), top_q(Eum, args.q)
-                r["jaccard_mm_um"] = jaccard(bmm, bum)
-                r["spearman_mm_um"] = spearman(Emm.reshape(-1), Eum.reshape(-1))
-                branch = top_q(rand, args.q)
-                r["jaccard_rand"] = jaccard(bum, branch)
-                if Ecr is not None:
-                    bcr = top_q(Ecr, args.q)
-                    r["jaccard_cross"] = jaccard(bmm, bcr)
-                    r["spearman_cross"] = spearman(Emm.reshape(-1), Ecr.reshape(-1))
-            rec["modules"][n] = r
-            lay = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
-            acc.setdefault(lay, []).append(r)
-        # per-layer aggregate (mean over 7 projections)
-        for lay, rs in acc.items():
+    def cosine(a, b):
+        d = a.norm() * b.norm()
+        return float((a * b).sum() / d) if d > 0 else float("nan")
+
+    out = {"config": vars(args), "per_target": [], "per_layer": {}}
+    for ti in range(len(targets)):
+        rec = {}
+        for n in names:
+            dm, nm2, fm2 = diags["mm"][ti][n]
+            du, nu2, fu2 = diags["um"][ti][n]
+            r = {"cos_diag": cosine(dm, du),
+                 "offdiag_mm": 1 - nm2 / fm2 if fm2 > 0 else None,
+                 "offdiag_um": 1 - nu2 / fu2 if fu2 > 0 else None}
+            if ti > 0:
+                d0 = diags["mm"][0][n][0]
+                r["cos_diag_cross_it"] = cosine(dm, d0)
+            rec[n] = r
+        out["per_target"].append({"index": ti, "modules": rec})
+        lay = {}
+        for n, r in rec.items():
+            L = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
+            lay.setdefault(L, []).append(r)
+        for L, rs in lay.items():
             agg = {}
-            for key in ("jaccard_mm_um", "spearman_mm_um", "jaccard_rand",
-                        "jaccard_cross", "spearman_cross"):
-                vals = [x[key] for x in rs if key in x and not math_isnan(x[key])]
+            for key in ("cos_diag", "offdiag_mm", "offdiag_um", "cos_diag_cross_it"):
+                vals = [x[key] for x in rs if x.get(key) is not None]
                 if vals:
                     agg[key] = float(np.mean(vals))
-            out["per_layer"].setdefault(lay, {})[str(ti)] = agg
-        out["targets"].append(ti)
-        out["per_module"][str(ti)] = rec["modules"]
-        print(f"target {ti}: mean J(mm,um)={np.mean([v['jaccard_mm_um'] for v in rec['modules'].values() if 'jaccard_mm_um' in v]):.3f} "
-              f"mean rho={np.mean([v['spearman_mm_um'] for v in rec['modules'].values() if 'spearman_mm_um' in v]):.3f} "
-              f"| J_cross(IT_i,IT_0)={np.mean([v['jaccard_cross'] for v in rec['modules'].values() if 'jaccard_cross' in v]):.3f}",
-              flush=True)
+            out["per_layer"].setdefault(L, {})[str(ti)] = agg
+        mc = float(np.mean([r["cos_diag"] for r in rec.values()]))
+        mo = float(np.mean([r["offdiag_mm"] for r in rec.values() if r["offdiag_mm"] is not None]))
+        msg = f"target {ti}: mean cos_diag(mm,um)={mc:.3f}  mean offdiag_mm={mo:.3f}"
+        if ti > 0:
+            msg += f"  | cross IT={np.mean([r['cos_diag_cross_it'] for r in rec.values()]):.3f}"
+        print(msg, flush=True)
 
     grabber.remove()
     emb_hook.remove()
@@ -288,13 +255,6 @@ def main():
     outp.parent.mkdir(parents=True, exist_ok=True)
     outp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"saved: {outp}")
-
-
-def math_isnan(x):
-    try:
-        return np.isnan(x)
-    except Exception:
-        return False
 
 
 if __name__ == "__main__":
