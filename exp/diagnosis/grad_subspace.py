@@ -52,20 +52,21 @@ def collect_modules(model):
 
 
 class Grabber:
+    """只装 forward hook：存输入激活 a（detach）+ 在输出张量上注册 hook 存 dL/dout（detach）。
+    不使用 full_backward_hook（那会额外持有图，导致 pass 后显存不释放）。"""
+
     def __init__(self, modules):
         self.a, self.d, self.h = {}, {}, []
         for name, mod in modules.items():
             self.h.append(mod.register_forward_hook(self._mk_fwd(name)))
-            self.h.append(mod.register_full_backward_hook(self._mk_bwd(name)))
 
     def _mk_fwd(self, name):
         def hook(mod, inp, out):
-            self.a[name] = inp[0]
-        return hook
-
-    def _mk_bwd(self, name):
-        def hook(mod, gin, gout):
-            self.d[name] = gout[0]
+            x = inp[0]
+            if torch.is_tensor(x):
+                self.a[name] = x.detach()
+            if torch.is_tensor(out) and out.requires_grad:
+                out.register_hook(lambda g, _n=name: self.d.__setitem__(_n, g.detach()))
         return hook
 
     def clear(self):
