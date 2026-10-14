@@ -128,6 +128,9 @@ def run_pass(model, grabber, pair, modality, device, processor, max_length, hand
         handler(n, gw)
         del gw
     grabber.clear()
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
     if timing:
         print(f"    fwd={t1-t0:.2f} bwd={t2-t1:.2f} dW={time.time()-t2:.2f}", flush=True)
     return float(loss.item())
@@ -192,12 +195,12 @@ def main():
 
     diags = {}   # diags[m][ti][name] = (diag[K], dnorm2, frob2) on cpu
     for m in ("mm", "um"):
-        vhat = {n: torch.zeros(modules[n].weight.shape, dtype=torch.float32,
+        vhat = {n: torch.zeros(modules[n].weight.shape, dtype=torch.bfloat16,
                                device=args.device) for n in names}
         _mem(f'vhat-{m}')
 
         def acc_ref(n, gw, _v=vhat):
-            _v[n].add_(gw * gw)
+            _v[n].add_((gw * gw).to(torch.bfloat16))
 
         for si, p in enumerate(refs):
             run_pass(model, grabber, p, m, args.device, processor,
@@ -207,7 +210,7 @@ def main():
             if (si + 1) % 5 == 0:
                 print(f"  ref {m} {si+1}/{len(refs)}", flush=True)
         for n in names:
-            vhat[n] = vhat[n].sqrt_().div_(np.sqrt(len(refs))).add_(1e-8)
+            vhat[n] = vhat[n].float().sqrt_().div_(np.sqrt(len(refs))).add_(1e-8).to(torch.bfloat16)
         print(f"  vhat[{m}] ready", flush=True)
 
         diags[m] = []
@@ -215,7 +218,7 @@ def main():
             entry = {}
 
             def acc_target(n, gw, _e=entry, _v=vhat):
-                gh = gw / _v[n]
+                gh = gw / _v[n].float()
                 flat = gh.abs().reshape(-1)
                 kk = max(1, int(round(args.k / 100.0 * flat.numel())))
                 thr = torch.topk(flat, kk).values.min()
