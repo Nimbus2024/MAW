@@ -167,6 +167,7 @@ def main():
     ap.add_argument("--n_target", type=int, default=3)
     ap.add_argument("--n_ref", type=int, default=50)
     ap.add_argument("--k", type=float, default=1.0)
+    ap.add_argument("--min_ans_tokens", type=int, default=2)
     ap.add_argument("--q", type=float, default=1.0)
     ap.add_argument("--K", type=int, default=256)
     ap.add_argument("--seed", type=int, default=42)
@@ -202,9 +203,24 @@ def main():
                          / "train-00000-of-00001.parquet")
     pairs = build_pairs(df)
     order = torch.randperm(len(pairs), generator=torch.Generator().manual_seed(args.seed)).tolist()
-    targets = [pairs[i] for i in order[:args.n_target]]
+    tok = processor.tokenizer
+
+    def _ans_toks(i):
+        return len(tok(pairs[i]["mm_a"], add_special_tokens=False)["input_ids"])
+
+    def _valid(i):
+        a = pairs[i]["mm_a"].strip()
+        return a.upper() not in ("NA", "N/A", "NONE", "") and _ans_toks(i) >= args.min_ans_tokens
+
+    valid = [i for i in order if _valid(i)]
+    target_idx = valid[:args.n_target]
+    targets = [pairs[i] for i in target_idx]
     refs = [pairs[i] for i in order[:args.n_ref]]
-    print(f"pairs={len(pairs)} targets={len(targets)} refs={len(refs)}", flush=True)
+    print(f"pairs={len(pairs)} degenerate={len(order) - len(valid)} "
+          f"targets={len(targets)} refs={len(refs)}", flush=True)
+    for _j, _i in enumerate(target_idx):
+        print(f"  target {_j}: perm_idx={_i} row={pairs[_i]['row']} key={pairs[_i]['key']} "
+              f"ans_tokens={_ans_toks(_i)} ans={pairs[_i]['mm_a'][:40]!r}", flush=True)
 
     # W 截断 SVD 基（缓存）
     cache_path = Path(args.cache_basis) if args.cache_basis else None
@@ -322,7 +338,12 @@ def main():
                 r["jaccard_cross_it"] = _jaccard(top_q_np(Em, args.q), top_q_np(E0, args.q))
                 r["spearman_cross_it"] = _spearman_np(Em.ravel(), E0.ravel())
             rec[n] = r
-        out["per_target"].append({"index": ti, "modules": rec})
+        _i = target_idx[ti]
+        out["per_target"].append({
+            "index": ti, "modules": rec,
+            "meta": {"perm_idx": int(_i), "row": int(pairs[_i]["row"]),
+                     "key": str(pairs[_i]["key"]), "ans": str(pairs[_i]["mm_a"])[:80],
+                     "ans_tokens": int(_ans_toks(_i))}})
         lay = {}
         for n, r in rec.items():
             L = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
