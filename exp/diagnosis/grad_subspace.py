@@ -342,7 +342,9 @@ def main():
         out["per_target"].append({
             "index": ti, "modules": rec,
             "meta": {"perm_idx": int(_i), "row": int(pairs[_i]["row"]),
-                     "key": str(pairs[_i]["key"]), "ans": str(pairs[_i]["mm_a"])[:80],
+                     "key": str(pairs[_i]["key"]),
+                     "q_um": str(pairs[_i]["um_q"])[:120],
+                     "ans": str(pairs[_i]["mm_a"])[:80],
                      "ans_tokens": int(_ans_toks(_i))}})
         lay = {}
         for n, r in rec.items():

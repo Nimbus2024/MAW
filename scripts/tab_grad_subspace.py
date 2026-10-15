@@ -79,13 +79,19 @@ def main():
     n_pair = len(metas)
 
     out = ["## 目标对（跳过退化答案：`NA` / 答案 token < 2），seed=42", ""]
-    out += ["| # | perm_idx | row | key | 答案 | ans tokens |", "|---|---|---|---|---|---|"]
+    has_q = any(t.get("meta", {}).get("q_um") for t in metas)
+    if has_q:
+        out += ["| # | perm_idx | row | 问题 | 答案 | ans tokens |", "|---|---|---|---|---|---|"]
+    else:
+        out += ["| # | perm_idx | row | key | 答案 | ans tokens |", "|---|---|---|---|---|---|"]
     for ti, t in enumerate(metas):
         m = t.get("meta")
         if m is None:
             out.append(f"| pair {ti} | ? | ? | ? | (no meta) | ? |")
             continue
-        out.append(f"| pair {ti} | {m['perm_idx']} | {m['row']} | {m['key']} | "
+        q_or_key = m["q_um"] if m.get("q_um") else m["key"]
+        out.append(f"| pair {ti} | {m['perm_idx']} | {m['row']} | "
+                   f"{q_or_key.replace('|', '/')} | "
                    f"{m['ans'].replace('|', '/')[:44]} | {m['ans_tokens']} |")
     out += ["", "基线 = **同模态异题**（该对 IT_i vs IT_0）= 通用/格式对照；"
                 "比值 = mm-um ÷ 该基线。pair 0 即 IT_0，无基线。", ""]
