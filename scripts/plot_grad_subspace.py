@@ -98,7 +98,7 @@ def fig_A(jsonpath, outdir, q=1.0):
     fig.suptitle("A: full |C|$^2$ energy-map overlap in W's SVD basis  "
                  "(all %d target pairs)" % n_pair, fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
-    save(fig, outdir, "fig_gradsub_A_emaps")
+    save(fig, outdir, "fig_gradsub_A_layers")
     plt.close(fig)
 
 
@@ -217,12 +217,62 @@ def fig_B_lp(jsonpath, outdir):
                 ax.set_xlabel("projection")
     fig.suptitle("B: subspace overlap, layer x projection "
                  "(top = subL/left/output, bottom = subR/right/input)", fontsize=12)
-    fig.tight_layout(rect=(0, 0, 0.90, 0.94))
+    fig.tight_layout(rect=(0, 0, 0.90, 0.94), h_pad=2.2)
     cax1 = fig.add_axes([0.915, 0.55, 0.012, 0.33])
     fig.colorbar(ims[(0, n_pair - 1)], cax=cax1).set_label("subL overlap", size=8)
     cax2 = fig.add_axes([0.915, 0.11, 0.012, 0.33])
     fig.colorbar(ims[(1, n_pair - 1)], cax=cax2).set_label("subR overlap", size=8)
     save(fig, outdir, "fig_gradsub_B_lp")
+    plt.close(fig)
+
+
+def fig_A_lp(jsonpath, outdir):
+    """A 的 层(32) x 投影(7) 热力图：上排 Jaccard、下排 Spearman（与 B_lp 对称）。"""
+    import json
+    import re
+    d = json.load(open(jsonpath))
+    projs = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    n_pair = len(d["per_target"])
+    fig, axes = plt.subplots(2, n_pair, figsize=(3.0 * n_pair + 1.6, 8.6), squeeze=False)
+    rows = (("jaccard_mm_um", "A: Jaccard (support overlap)"),
+            ("spearman_mm_um", "A: Spearman (energy-map rank corr)"))
+    ims = {}
+    for r, (key, ttl) in enumerate(rows):
+        mats, vmax = [], 0.0
+        for ti in range(n_pair):
+            M = np.full((32, len(projs)), np.nan)
+            for n, v in d["per_target"][ti]["modules"].items():
+                m = re.search(r"layers\.(\d+)\.", n)
+                if not m:
+                    continue
+                L = int(m.group(1))
+                if not 0 <= L < 32:
+                    continue
+                for j, p in enumerate(projs):
+                    if n.endswith(p):
+                        M[L, j] = v[key]
+            mats.append(M)
+            vmax = max(vmax, np.nanmax(M))
+        for c, ti in enumerate(range(n_pair)):
+            ax = axes[r, c]
+            ims[(r, c)] = ax.imshow(mats[c], aspect="auto", origin="lower", cmap="viridis",
+                                    vmin=0, vmax=vmax)
+            ax.set_xticks(range(len(projs)))
+            ax.set_xticklabels([p.replace("_proj", "") for p in projs], fontsize=8)
+            ax.set_yticks([0, 8, 16, 24, 31])
+            if c == 0:
+                ax.set_ylabel("layer")
+            ax.set_title(f"{ttl}  (pair {ti})", fontsize=9)
+            if r == 1:
+                ax.set_xlabel("projection")
+    fig.suptitle("A: support / rank-corr overlap, layer x projection",
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0, 0.90, 0.94), h_pad=2.2)
+    cax1 = fig.add_axes([0.915, 0.55, 0.012, 0.33])
+    fig.colorbar(ims[(0, n_pair - 1)], cax=cax1).set_label("Jaccard", size=8)
+    cax2 = fig.add_axes([0.915, 0.11, 0.012, 0.33])
+    fig.colorbar(ims[(1, n_pair - 1)], cax=cax2).set_label("Spearman", size=8)
+    save(fig, outdir, "fig_gradsub_A_lp")
     plt.close(fig)
 
 
@@ -327,9 +377,11 @@ def main():
     fig_A(args.json_path, args.outdir)
     fig_B(args.json_path, args.outdir)
     fig_proj(args.json_path, args.outdir)
+    fig_A_lp(args.json_path, args.outdir)
     fig_B_lp(args.json_path, args.outdir)
     fig_cos(args.json_path, args.outdir)
-    print("saved fig_gradsub_emaps/diag/A_emaps/B_layers to", args.outdir)
+    print("saved fig_gradsub_{emaps,diag,A_layers,A_lp,B_layers,B_lp,proj,cos}"
+          + SUFFIX + " to", args.outdir)
 
 
 if __name__ == "__main__":
