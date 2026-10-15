@@ -65,9 +65,18 @@ def _baseline(pl, layers, ckey, n_pair):
         if any(v is not None for v in col):
             ys.append(col)
     if not ys:
-        return []
+        return None
     return [np.nanmean([y[i] for y in ys]) if any(y[i] is not None for y in ys) else np.nan
             for i in range(len(layers))]
+
+
+def plot_baselines(ax, pl, layers, ckey_it, ckey_um, n_pair):
+    """画同模态异题基线：IT 侧(黑虚线) + PT 侧(深灰点划线)。"""
+    for key, ls, col, lab in ((ckey_it, "--", "black", "IT$_i$ vs IT$_0$ (diff. pair)"),
+                              (ckey_um, "-.", "#666666", "PT$_i$ vs PT$_0$ (diff. pair)")):
+        y = _baseline(pl, layers, key, n_pair)
+        if y is not None and any(v is not None for v in y):
+            ax.plot(layers, y, ls, color=col, lw=1.3, label=lab)
 
 
 def fig_A(jsonpath, outdir, q=1.0):
@@ -86,9 +95,7 @@ def fig_A(jsonpath, outdir, q=1.0):
         for ti, col in enumerate(_pair_colors(n_pair)):
             y = [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
             ax.plot(layers, y, "-o", ms=2.6, lw=1.4, color=col, label=f"mm vs um (pair {ti})")
-        yc = _baseline(pl, layers, ckey, n_pair)
-        if any(v is not None for v in yc):
-            ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
+        plot_baselines(ax, pl, layers, ckey, ckey.replace("cross_it", "cross_um"), n_pair)
         ax.axhline(rnd, ls=":", color="gray", lw=1.2, label=f"random (={rnd:g})")
         ax.set_xlabel("layer index")
         ax.set_ylabel(yl)
@@ -116,9 +123,7 @@ def fig_B(jsonpath, outdir):
             y = [pl[str(L)].get(str(ti), {}).get(key) for L in layers]
             ax.plot(layers, y, "-o", ms=2.6, lw=1.5, color=col, label=f"mm vs um (pair {ti})")
         ckey = "subL_it_i0" if key == "subL_mm_um" else "subR_it_i0"
-        yc = _baseline(pl, layers, ckey, n_pair)
-        if all(v is not None for v in yc):
-            ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
+        plot_baselines(ax, pl, layers, ckey, ckey.replace("_it_i0", "_um_i0"), n_pair)
         yr = [pl[str(L)].get("0", {}).get(rnd_key) for L in layers]
         if all(v is not None for v in yr):
             ax.plot(layers, yr, ":", color="gray", lw=1.3, label="random subspace")
@@ -287,9 +292,7 @@ def fig_cos(jsonpath, outdir):
     for ti, col in enumerate(_pair_colors(n_pair)):
         y = [pl[str(L)].get(str(ti), {}).get("cos_raw") for L in layers]
         ax.plot(layers, y, "-o", ms=2.8, lw=1.5, color=col, label=f"mm vs um (pair {ti})")
-    yc = _baseline(pl, layers, "cos_raw_cross_it", n_pair)
-    if any(v is not None for v in yc):
-        ax.plot(layers, yc, "--", color="black", lw=1.3, label="IT$_i$ vs IT$_0$ (diff. pair)")
+    plot_baselines(ax, pl, layers, "cos_raw_cross_it", "cos_raw_cross_um", n_pair)
     ax.axhline(0, ls=":", color="gray", lw=1.2, label="0 = orthogonal")
     ax.set_xlabel("layer index")
     ax.set_ylabel(r"$\cos(gW_{mm}, gW_{um})$")
