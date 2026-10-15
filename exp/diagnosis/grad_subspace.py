@@ -292,6 +292,12 @@ def main():
                     rec["cos_raw"] = float((gm * gw).sum()
                                            / (gm.norm() * gw.norm() + 1e-12))
                     del gm
+                    if _ti > 0 and "raw" in diags["um"][0][n]:
+                        # PT 侧的同模态异题余弦：当场算，避免把所有 um raw 都留在内存
+                        b0 = diags["um"][0][n]["raw"].to(gw.device).float()
+                        rec["cos_raw_cross_um"] = float((b0 * gw).sum()
+                                                        / (b0.norm() * gw.norm() + 1e-12))
+                        del b0
                 _e[n] = rec
 
             run_pass(model, grabber, p, m, args.device, processor,
@@ -344,9 +350,7 @@ def main():
                 r["subL_um_i0"] = float((Uu.t() @ U0u).pow(2).sum()) / k
                 V0u = f0["Vg"].float()
                 r["subR_um_i0"] = float((Vu.t() @ V0u).pow(2).sum()) / k
-                b0, b1 = f0["raw"].float(), eu["raw"].float()
-                r["cos_raw_cross_um"] = float((b0 * b1).sum()
-                                              / (b0.norm() * b1.norm() + 1e-12))
+                r["cos_raw_cross_um"] = eu.get("cos_raw_cross_um")
                 E0u = f0["E"].astype(np.float32)
                 r["jaccard_cross_um"] = _jaccard(top_q_np(Eu, args.q), top_q_np(E0u, args.q))
                 r["spearman_cross_um"] = _spearman_np(Eu.ravel(), E0u.ravel())
