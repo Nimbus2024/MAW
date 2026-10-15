@@ -18,6 +18,7 @@ METHODS = [
     ("(4)  cos_raw  [direct grad cos]", "cos_raw", "cos_raw_cross_it"),
 ]
 THRESHOLDS = [("100", "no threshold (k=100%)"), ("1", "k = 1%"), ("5", "k = 5%")]
+RATIO_MIN_BASE = 0.005   # 基线太小时比值不稳（cos 的异题基线≈0，可正可负）-> 改用差值
 
 
 def v_layer(d, ti, key):
@@ -72,7 +73,12 @@ def main():
                     cells.append(f"{v:.4f}")
                 else:
                     b = v_layer(d, ti, bkey)
-                    cells.append(f"{v:.4f} ({v / b:.1f}x)" if b else f"{v:.4f}")
+                    if b is None:
+                        cells.append(f"{v:.4f}")
+                    elif abs(b) < RATIO_MIN_BASE:
+                        cells.append(f"{v:.4f} (d={v - b:+.4f})")
+                    else:
+                        cells.append(f"{v:.4f} ({v / b:.1f}x)")
             out.append("| " + label + " | " + " | ".join(cells) + " |")
         bl_cells = []
         for ti in range(n_pair):
@@ -99,7 +105,12 @@ def main():
             cells = []
             for ti in range(1, n_pair):
                 v, b = v_layer(d, ti, key), v_layer(d, ti, bkey)
-                cells.append(f"{v / b:.1f}" if v is not None and b else "—")
+                if v is None or b is None:
+                    cells.append("—")
+                elif abs(b) < RATIO_MIN_BASE:
+                    cells.append(f"d{v - b:+.3f}")
+                else:
+                    cells.append(f"{v / b:.1f}")
             out.append(f"| {label.split('[')[0].strip()} @ {tname} | " + " | ".join(cells) + " |")
 
     Path(args.out).write_text("\n".join(out) + "\n")
