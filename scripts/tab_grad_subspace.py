@@ -18,7 +18,7 @@ METHODS = [
     ("(4)  cos_raw  [direct grad cos]", "cos_raw", "cos_raw_cross_it"),
 ]
 THRESHOLDS = [("100", "no threshold (k=100%)"), ("1", "k = 1%"), ("5", "k = 5%")]
-RATIO_MIN_BASE = 0.005   # 基线太小时比值不稳（cos 的异题基线≈0，可正可负）-> 改用差值
+RATIO_MIN_BASE = 0.005   # 基线非正或太小时比值无意义（cos 的异题基线≈0，可负）-> 改用差值
 
 
 def v_layer(d, ti, key):
@@ -28,11 +28,43 @@ def v_layer(d, ti, key):
     return float(np.mean(vs)) if vs else None
 
 
+def make_fig(data, n_pair, figdir):
+    """同一方法在 3 档阈值下的"相对异题基线倍数"，看结论是否随阈值漂移。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    mets = [(l.split("[")[0].strip(), k, bk) for l, k, bk in METHODS if bk]
+    cols = list(plt.get_cmap("tab10").colors)
+    fig, axes = plt.subplots(1, len(mets), figsize=(3.1 * len(mets), 3.6), squeeze=False)
+    for ax, (label, key, bk) in zip(axes[0], mets):
+        for j, (tag, tname) in enumerate(THRESHOLDS):
+            d = data[tag]
+            ys = []
+            for ti in range(1, n_pair):
+                v, b = v_layer(d, ti, key), v_layer(d, ti, bk)
+                ys.append(np.nan if (v is None or b is None or b < RATIO_MIN_BASE) else v / b)
+            ax.plot(range(1, n_pair), ys, "-o", ms=4, color=cols[j], label=tname)
+        ax.axhline(1.0, ls=":", color="gray", lw=1.2)
+        ax.set_title(label, fontsize=9)
+        ax.set_xlabel("target pair")
+        ax.set_xticks(range(1, n_pair))
+        ax.grid(alpha=0.3)
+    axes[0][0].set_ylabel("mm-um / (same-modality, diff-question)")
+    axes[0][0].legend(frameon=False, fontsize=7)
+    fig.suptitle("route-A excess vs threshold  (1.0 = same as the generic/format control)", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    for ext in ("svg", "png"):
+        fig.savefig(Path(figdir) / f"fig_gradsub_thr_sensitivity.{ext}", dpi=150)
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default="../product/results/_analysis")
     ap.add_argument("--prefix", default="grad_subspace_k")
     ap.add_argument("--out", default="../references/think/grad_subspace_thresholds.md")
+    ap.add_argument("--figdir", default="../references/think/figs")
     args = ap.parse_args()
 
     data, metas = {}, None
@@ -75,7 +107,7 @@ def main():
                     b = v_layer(d, ti, bkey)
                     if b is None:
                         cells.append(f"{v:.4f}")
-                    elif abs(b) < RATIO_MIN_BASE:
+                    elif b < RATIO_MIN_BASE:
                         cells.append(f"{v:.4f} (d={v - b:+.4f})")
                     else:
                         cells.append(f"{v:.4f} ({v / b:.1f}x)")
@@ -107,12 +139,13 @@ def main():
                 v, b = v_layer(d, ti, key), v_layer(d, ti, bkey)
                 if v is None or b is None:
                     cells.append("—")
-                elif abs(b) < RATIO_MIN_BASE:
+                elif b < RATIO_MIN_BASE:
                     cells.append(f"d{v - b:+.3f}")
                 else:
                     cells.append(f"{v / b:.1f}")
             out.append(f"| {label.split('[')[0].strip()} @ {tname} | " + " | ".join(cells) + " |")
 
+    make_fig(data, n_pair, args.figdir)
     Path(args.out).write_text("\n".join(out) + "\n")
     print("\n".join(out))
     print(f"\n[saved] {args.out}")
