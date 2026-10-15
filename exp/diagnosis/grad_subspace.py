@@ -285,9 +285,9 @@ def main():
                 lay = n.split(".layers.")[1].split(".")[0] if ".layers." in n else n
                 rec["E"] = (C.detach().float() ** 2).half().cpu().numpy()
                 rec["lay"] = lay
-                if _m == "mm":
+                if _m == "mm" or _ti == 0:      # mm 全存；um 只留 pair 0 作 PT 侧参照
                     rec["raw"] = gw.to(torch.bfloat16).cpu()
-                else:
+                if _m == "um":
                     gm = diags["mm"][_ti][n]["raw"].to(gw.device).float()
                     rec["cos_raw"] = float((gm * gw).sum()
                                            / (gm.norm() * gw.norm() + 1e-12))
@@ -337,6 +337,19 @@ def main():
                 E0 = e0["E"].astype(np.float32)
                 r["jaccard_cross_it"] = _jaccard(top_q_np(Em, args.q), top_q_np(E0, args.q))
                 r["spearman_cross_it"] = _spearman_np(Em.ravel(), E0.ravel())
+
+                f0 = diags["um"][0][n]          # PT 侧参照 (um of pair 0)
+                r["cos_diag_cross_um"] = cosine(eu["diag"], f0["diag"])
+                U0u = f0["Ug"].float()
+                r["subL_um_i0"] = float((Uu.t() @ U0u).pow(2).sum()) / k
+                V0u = f0["Vg"].float()
+                r["subR_um_i0"] = float((Vu.t() @ V0u).pow(2).sum()) / k
+                b0, b1 = f0["raw"].float(), eu["raw"].float()
+                r["cos_raw_cross_um"] = float((b0 * b1).sum()
+                                              / (b0.norm() * b1.norm() + 1e-12))
+                E0u = f0["E"].astype(np.float32)
+                r["jaccard_cross_um"] = _jaccard(top_q_np(Eu, args.q), top_q_np(E0u, args.q))
+                r["spearman_cross_um"] = _spearman_np(Eu.ravel(), E0u.ravel())
             rec[n] = r
         _i = target_idx[ti]
         out["per_target"].append({
@@ -352,10 +365,14 @@ def main():
             lay.setdefault(L, []).append(r)
         for L, rs in lay.items():
             agg = {}
-            for key in ("cos_diag", "offdiag_mm", "offdiag_um", "cos_diag_cross_it",
-                        "subL_mm_um", "subR_mm_um", "subL_rand", "subR_rand", "subL_it_i0", "subR_it_i0",
-                        "jaccard_mm_um", "spearman_mm_um", "jaccard_cross_it", "spearman_cross_it",
-                        "cos_raw", "cos_raw_cross_it"):
+            for key in ("cos_diag", "offdiag_mm", "offdiag_um",
+                        "cos_diag_cross_it", "cos_diag_cross_um",
+                        "subL_mm_um", "subR_mm_um", "subL_rand", "subR_rand",
+                        "subL_it_i0", "subR_it_i0", "subL_um_i0", "subR_um_i0",
+                        "jaccard_mm_um", "spearman_mm_um",
+                        "jaccard_cross_it", "spearman_cross_it",
+                        "jaccard_cross_um", "spearman_cross_um",
+                        "cos_raw", "cos_raw_cross_it", "cos_raw_cross_um"):
                 vals = [x[key] for x in rs if x.get(key) is not None]
                 if vals:
                     agg[key] = float(np.mean(vals))
@@ -370,6 +387,9 @@ def main():
         if ti > 0:
             msg += f" | subL(IT_i,IT_0)={np.mean([r['subL_it_i0'] for r in rec.values()]):.3f}"
             msg += f" subR(IT_i,IT_0)={np.mean([r['subR_it_i0'] for r in rec.values()]):.3f}"
+            if 'subL_um_i0' in next(iter(rec.values())):
+                msg += f" | subL(PT_i,PT_0)={np.mean([r['subL_um_i0'] for r in rec.values()]):.3f}"
+                msg += f" subR(PT_i,PT_0)={np.mean([r['subR_um_i0'] for r in rec.values()]):.3f}"
         print(msg, flush=True)
 
     grabber.remove()
