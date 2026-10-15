@@ -64,7 +64,7 @@ def main():
     ap.add_argument("--dir", default="../product/results/_analysis")
     ap.add_argument("--prefix", default="grad_subspace_k")
     ap.add_argument("--out", default="../references/think/grad_subspace_thresholds.md")
-    ap.add_argument("--figdir", default="../references/think/figs")
+    ap.add_argument("--figdir", default="")   # 留空则不出图（图统一用 plot_grad_subspace.py）
     args = ap.parse_args()
 
     data, metas = {}, None
@@ -145,7 +145,8 @@ def main():
                     cells.append(f"{v / b:.1f}")
             out.append(f"| {label.split('[')[0].strip()} @ {tname} | " + " | ".join(cells) + " |")
 
-    make_fig(data, n_pair, args.figdir)
+    if args.figdir:
+        make_fig(data, n_pair, args.figdir)
     Path(args.out).write_text("\n".join(out) + "\n")
     print("\n".join(out))
     print(f"\n[saved] {args.out}")
