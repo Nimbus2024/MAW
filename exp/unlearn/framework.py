@@ -39,7 +39,7 @@ from .retain import compute_retain_kl
 
 
 def _build_model(args, objective):
-    set_global_seed(42)
+    set_global_seed(args.seed)
     need_ref = objective.needs_ref or args.lmbda > 0
     model, ref_model, processor = load_model_and_processor(args, load_ref=need_ref)
 
@@ -325,6 +325,7 @@ def build_parser():
     parser.add_argument("--grad_norm_scope", choices=("layer", "global"), default="layer",
                         help="balance 模式的归一尺度：逐层 or 全局")
     parser.add_argument("--grad_norm_eps", type=float, default=1e-12)
+    parser.add_argument("--seed", type=int, default=42, help="random seed (for multi-seed runs)")
     return parser
 
 
