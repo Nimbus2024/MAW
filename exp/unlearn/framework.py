@@ -66,6 +66,12 @@ def _build_model(args, objective):
             json.dump(vars(args), f, indent=2, default=str)
     print("Applying LoRA...")
     model = get_peft_model(model, lora_config)
+    if args.init_adapter:
+        # 2B：从既有 checkpoint 分支（继续训练），用于 stage-wise γ* 搜索
+        from peft import load_peft_weights, set_peft_model_state_dict
+        w = load_peft_weights(args.init_adapter)
+        msg = set_peft_model_state_dict(model, w)
+        print(f"init_adapter loaded from {args.init_adapter}: {msg}")
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -296,6 +302,8 @@ def build_parser():
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--num_epochs", type=int, default=5)
     parser.add_argument("--max_steps", type=int, default=None)
+    parser.add_argument("--init_adapter", type=str, default=None,
+                        help="从既有 LoRA checkpoint 分支继续训练（2B stage-wise 搜索用）")
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--lora_alpha", type=int, default=16)
