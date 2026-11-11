@@ -5,6 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON="${PYTHON:-python}"
+if ! command -v "${PYTHON}" >/dev/null 2>&1 && [[ -x "${CODE_ROOT}/../venv_vllm/bin/python" ]]; then
+  PYTHON="${CODE_ROOT}/../venv_vllm/bin/python"
+fi
 STAGE_ROOT="${STAGE_ROOT:-${CODE_ROOT}/../qwen3vl_stage}"
 DATA_DIR="${DATA_DIR:-${CODE_ROOT}/../dependencies/data/UMU-bench}"
 MODEL="${MODEL:-}"
