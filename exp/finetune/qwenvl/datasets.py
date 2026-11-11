@@ -130,3 +130,71 @@ def load_eval_samples(parquet_path, modality: str = "mm", limit=None, seed: int 
         }
         for row_idx, question, answer, kind in items
     ]
+
+
+def load_task_samples(parquet_path, limit=None, seed: int = 42):
+    df = pd.read_parquet(parquet_path).reset_index(drop=True)
+    items = []
+    images = {}
+    for row_idx, row in df.iterrows():
+        for task, column in (
+            ("classification", "Classify"),
+            ("cloze", "Cloze"),
+            ("generation", "Generation"),
+        ):
+            data = _as_mapping(row.get(column))
+            for group_name, group in data.items():
+                if not isinstance(group, dict):
+                    continue
+                modality = "Image_Textual" if group_name == "muitimodal" else "Pure_Text"
+                for item in group.values():
+                    if not isinstance(item, dict):
+                        continue
+                    question = item.get("question", "")
+                    answer = item.get("answer", "")
+                    if not question or answer in (None, ""):
+                        continue
+                    options = item.get("options") if task == "classification" else None
+                    correct_key = None
+                    if task == "classification":
+                        if not isinstance(options, dict) or not options:
+                            continue
+                        correct_key = str(answer).split(".", 1)[0].strip().upper()
+                        if correct_key not in {str(key).upper() for key in options}:
+                            continue
+                        answer_text = str(options.get(correct_key, answer))
+                        prompt = (
+                            f"{question}\n"
+                            + "\n".join(f"{key}. {value}" for key, value in options.items())
+                        )
+                    elif task == "cloze":
+                        answer_text = str(answer)
+                        prompt = (
+                            question.replace("__", "[Blank]")
+                            + "\nPlease **ONLY** provide the correct answer that should replace the [Blank]."
+                        )
+                    else:
+                        answer_text = str(answer)
+                        prompt = question
+                    if modality == "Image_Textual":
+                        if row_idx not in images:
+                            images[row_idx] = _decode_image(row)
+                        image = images[row_idx]
+                    else:
+                        image = None
+                    items.append(
+                        {
+                            "id": str(row.get("ID")),
+                            "image": image,
+                            "task": task,
+                            "type": modality,
+                            "question": prompt,
+                            "answer": answer_text,
+                            "options": options,
+                            "correct_key": correct_key,
+                        }
+                    )
+    if limit is not None and limit < len(items):
+        items = random.Random(seed).sample(items, limit)
+    return items
+

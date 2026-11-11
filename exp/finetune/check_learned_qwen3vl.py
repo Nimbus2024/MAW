@@ -14,7 +14,7 @@ from rouge_score import rouge_scorer
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
-from .qwenvl.datasets import load_eval_samples
+from .qwenvl.datasets import load_eval_samples, load_task_samples
 from .qwenvl.processor import build_eval_messages, update_processor_pixels
 from .qwenvl.runtime import resolve_attn_implementation
 
@@ -81,6 +81,66 @@ def evaluate_split(model, processor, device, samples, name, max_new_tokens, scor
     return summary, details
 
 
+def extract_choice(prediction: str, options):
+    keys = {str(key).upper() for key in options}
+    marked = re.search(
+        r"(?:ANSWER|CHOICE|OPTION)\s*(?:IS|:)??\s*[\(\[]?([A-Z])[\)\].,:]?",
+        prediction.upper(),
+    )
+    if marked and marked.group(1) in keys:
+        return marked.group(1)
+    first = re.match(r"^\s*[\(\[]?([A-Z])[\)\].,:]?\s*$", prediction.upper())
+    if first and first.group(1) in keys:
+        return first.group(1)
+    for match in re.finditer(r"(?<![A-Z0-9])([A-Z])(?![A-Z0-9])", prediction.upper()):
+        if match.group(1) in keys:
+            return match.group(1)
+    return None
+
+
+def score_task(sample, prediction, scorer):
+    if sample["task"] == "classification":
+        key = extract_choice(prediction, sample["options"])
+        if key is not None:
+            return float(key == sample["correct_key"]), "choice"
+        return float(normalize(sample["answer"]) in normalize(prediction)), "substring"
+    if sample["task"] == "cloze":
+        return float(normalize(sample["answer"]) in normalize(prediction)), "substring"
+    return scorer.score(sample["answer"], prediction)["rougeL"].fmeasure, "rougeL"
+
+
+def summarize_tasks(results):
+    groups = {}
+    for result in results:
+        for key in ("all", result["task"], result["type"]):
+            total, count = groups.get(key, (0.0, 0))
+            groups[key] = (total + result["score"], count + 1)
+    return {
+        key: {"score": total / count, "n": count}
+        for key, (total, count) in groups.items()
+    }
+
+
+def evaluate_task_split(model, processor, device, samples, name, max_new_tokens, scorer):
+    details = []
+    for sample in tqdm(samples, desc=name):
+        prediction = generate_answer(model, processor, device, sample, max_new_tokens)
+        score, metric = score_task(sample, prediction, scorer)
+        details.append(
+            {
+                "id": sample["id"],
+                "task": sample["task"],
+                "type": sample["type"],
+                "question": sample["question"],
+                "ground_truth": sample["answer"],
+                "prediction": prediction,
+                "score": score,
+                "metric": metric,
+            }
+        )
+    return summarize_tasks(details), details
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Check Qwen3-VL UMU origin fit and generalization")
     parser.add_argument("--model", required=True)
@@ -88,6 +148,7 @@ def parse_args():
     parser.add_argument("--real_parquet", required=True)
     parser.add_argument("--n_train", type=int, default=200)
     parser.add_argument("--n_real", type=int, default=200)
+    parser.add_argument("--n_real_tasks", type=int, default=200)
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--min_pixels", type=int, default=28 * 28 * 16)
     parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
@@ -137,11 +198,23 @@ def main():
     train_summary, train_details = evaluate_split(
         model, processor, device, train_samples, "train", args.max_new_tokens, scorer
     )
-    real_summary, real_details = evaluate_split(
-        model, processor, device, real_samples, "real_person", args.max_new_tokens, scorer
-    )
 
-    result = {"train": train_summary, "real_person": real_summary, "args": vars(args)}
+    if real_samples:
+        real_summary, real_details = evaluate_split(
+            model, processor, device, real_samples, "real_person", args.max_new_tokens, scorer
+        )
+        real_key = "real_person"
+    else:
+        task_limit = None if args.n_real_tasks <= 0 else args.n_real_tasks
+        task_samples = load_task_samples(
+            args.real_parquet, limit=task_limit, seed=args.seed
+        )
+        real_summary, real_details = evaluate_task_split(
+            model, processor, device, task_samples, "real_person_tasks", args.max_new_tokens, scorer
+        )
+        real_key = "real_person_tasks"
+
+    result = {"train": train_summary, real_key: real_summary, "args": vars(args)}
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
     if args.out:
@@ -151,7 +224,7 @@ def main():
                 {
                     "summary": result,
                     "train_details": train_details,
-                    "real_person_details": real_details,
+                    f"{real_key}_details": real_details,
                 },
                 handle,
                 ensure_ascii=False,
