@@ -69,7 +69,11 @@ def parse_args():
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.90)
     parser.add_argument("--dtype", choices=("auto", "float16", "bfloat16"), default="auto")
-    parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--enforce_eager", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--max_num_seqs", type=int, default=None)
+    parser.add_argument("--max_num_batched_tokens", type=int, default=None)
+    parser.add_argument("--mm_processor_cache_type", choices=("lru", "shm"), default=None)
+    parser.add_argument("--enable_prefix_caching", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--scopes", default="forget,retain_shared,retain_celebrity",
                         help="要评估的 scope 子集 (逗号分隔)")
     parser.add_argument("--dump_details", action="store_true",
@@ -226,22 +230,50 @@ class VLLMBackend:
             }
         else:
             mm_processor_kwargs = {"use_fast": False, "num_additional_image_tokens": 1}
-        print(f"Loading {self.kind} with vLLM from {engine_source}")
+        enforce_eager = (
+            args.enforce_eager if args.enforce_eager is not None else not self.is_qwen3vl
+        )
+        llm_kwargs = {
+            "model": engine_source,
+            "tokenizer": engine_source,
+            "dtype": dtype,
+            "tensor_parallel_size": args.tensor_parallel_size,
+            "max_model_len": args.max_model_len,
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "limit_mm_per_prompt": {"image": 1},
+            "mm_processor_kwargs": mm_processor_kwargs,
+            "enforce_eager": enforce_eager,
+        }
+        if args.max_num_seqs is not None:
+            llm_kwargs["max_num_seqs"] = args.max_num_seqs
+        if args.max_num_batched_tokens is not None:
+            llm_kwargs["max_num_batched_tokens"] = args.max_num_batched_tokens
+        if self.is_qwen3vl:
+            llm_kwargs["mm_processor_cache_type"] = args.mm_processor_cache_type or "shm"
+            if args.enable_prefix_caching is None:
+                llm_kwargs["enable_prefix_caching"] = True
+        elif args.mm_processor_cache_type is not None:
+            llm_kwargs["mm_processor_cache_type"] = args.mm_processor_cache_type
+        if args.enable_prefix_caching is not None:
+            llm_kwargs["enable_prefix_caching"] = args.enable_prefix_caching
+        print(
+            f"Loading {self.kind} with vLLM from {engine_source} "
+            f"(enforce_eager={enforce_eager}, mm_cache={llm_kwargs.get('mm_processor_cache_type')}, "
+            f"prefix_cache={llm_kwargs.get('enable_prefix_caching')})"
+        )
         try:
-            self.llm = LLM(
-                model=engine_source,
-                tokenizer=engine_source,
-                dtype=dtype,
-                tensor_parallel_size=args.tensor_parallel_size,
-                max_model_len=args.max_model_len,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-                limit_mm_per_prompt={"image": 1},
-                mm_processor_kwargs=mm_processor_kwargs,
-                enforce_eager=True,
-            )
-        except Exception:
-            self.cleanup()
-            raise
+            self.llm = LLM(**llm_kwargs)
+        except Exception as exc:
+            if self.is_qwen3vl and (
+                "mm_processor_cache_type" in llm_kwargs or "enable_prefix_caching" in llm_kwargs
+            ):
+                print(f"!! vLLM advanced options failed ({exc}); retrying without them", flush=True)
+                llm_kwargs.pop("mm_processor_cache_type", None)
+                llm_kwargs.pop("enable_prefix_caching", None)
+                self.llm = LLM(**llm_kwargs)
+            else:
+                self.cleanup()
+                raise
 
     def cleanup(self):
         """Remove the temporary merged LoRA model created for vLLM."""
