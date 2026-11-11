@@ -5,6 +5,7 @@ qwenvl.processor, with 3D mRoPE position ids from qwenvl.rope2d.
 """
 
 import ast
+import math
 import random
 from io import BytesIO
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 import pandas as pd
 import torch
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from .processor import build_messages, preprocess_qwen_visual
 from .rope2d import get_rope_index_3
@@ -198,3 +199,58 @@ def load_task_samples(parquet_path, limit=None, seed: int = 42):
         items = random.Random(seed).sample(items, limit)
     return items
 
+
+
+class ModalityBalancedBatchSampler(Sampler):
+    def __init__(self, dataset, mm_per_batch: int, um_per_batch: int, seed: int = 42):
+        if mm_per_batch < 1 or um_per_batch < 1:
+            raise ValueError("mm_per_batch and um_per_batch must be positive")
+        self.mm_indices = [
+            index for index, sample in enumerate(dataset.samples)
+            if sample["type"] == "Image_Textual"
+        ]
+        self.um_indices = [
+            index for index, sample in enumerate(dataset.samples)
+            if sample["type"] == "Pure_Text"
+        ]
+        if not self.mm_indices or not self.um_indices:
+            raise ValueError("balanced sampler requires both multimodal and unimodal samples")
+        self.mm_per_batch = mm_per_batch
+        self.um_per_batch = um_per_batch
+        self.seed = seed
+        self.epoch = 0
+        self.num_batches = max(
+            math.ceil(len(self.mm_indices) / mm_per_batch),
+            math.ceil(len(self.um_indices) / um_per_batch),
+        )
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+    def __iter__(self):
+        self.epoch += 1
+        rng = random.Random(self.seed + self.epoch)
+        mm = list(self.mm_indices)
+        um = list(self.um_indices)
+        rng.shuffle(mm)
+        rng.shuffle(um)
+        mm_pos = 0
+        um_pos = 0
+        for _ in range(self.num_batches):
+            batch = []
+            for _ in range(self.mm_per_batch):
+                if mm_pos >= len(mm):
+                    rng.shuffle(mm)
+                    mm_pos = 0
+                batch.append(mm[mm_pos])
+                mm_pos += 1
+            for _ in range(self.um_per_batch):
+                if um_pos >= len(um):
+                    rng.shuffle(um)
+                    um_pos = 0
+                batch.append(um[um_pos])
+                um_pos += 1
+            yield batch

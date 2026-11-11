@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Qwen3-VL origin SFT launcher. Results stay under STAGE_ROOT (default ../qwen3vl_stage).
 set -euo pipefail
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

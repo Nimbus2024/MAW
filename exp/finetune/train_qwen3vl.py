@@ -19,6 +19,7 @@ if "--no-use_unsloth" not in sys.argv:
         pass
 
 import torch
+from torch.utils.data import DataLoader
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import (
     AutoProcessor,
@@ -30,7 +31,7 @@ from transformers import (
 
 from .. import _paths
 from .qwenvl.collator import DataCollatorForSupervisedDataset
-from .qwenvl.datasets import UmuQwenDataset
+from .qwenvl.datasets import ModalityBalancedBatchSampler, UmuQwenDataset
 from .qwenvl.processor import update_processor_pixels
 from .qwenvl.runtime import resolve_attn_implementation
 
@@ -84,6 +85,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--max_steps", type=int, default=-1)
+    parser.add_argument("--balanced_mm_per_batch", type=int, default=0)
+    parser.add_argument("--balanced_um_per_batch", type=int, default=0)
     parser.add_argument("--skip_save", action="store_true")
     parser.add_argument("--deepspeed", default="")
     parser.add_argument("--resume", default="")
@@ -194,6 +197,23 @@ def load_model(model_id, args):
     return _load_standard(model_id, args), False
 
 
+class BalancedTrainer(Trainer):
+    def __init__(self, *args, batch_sampler=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._batch_sampler = batch_sampler
+
+    def get_train_dataloader(self):
+        if self._batch_sampler is None:
+            return super().get_train_dataloader()
+        return DataLoader(
+            self.train_dataset,
+            batch_sampler=self._batch_sampler,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
+
+
 def save_merged(model, processor, output_dir, used_unsloth=False):
     os.makedirs(output_dir, exist_ok=True)
     if used_unsloth and hasattr(model, "save_pretrained_merged"):
@@ -241,6 +261,23 @@ def main():
         processor.tokenizer, include_position_ids=not used_unsloth
     )
 
+    use_balanced = args.balanced_mm_per_batch > 0 or args.balanced_um_per_batch > 0
+    batch_sampler = None
+    if use_balanced:
+        if args.modalities != "mm_um":
+            raise ValueError("balanced batch sampler requires --modalities mm_um")
+        if args.balanced_mm_per_batch < 1 or args.balanced_um_per_batch < 1:
+            raise ValueError("both --balanced_mm_per_batch and --balanced_um_per_batch must be positive")
+        if args.batch_size != args.balanced_mm_per_batch + args.balanced_um_per_batch:
+            raise ValueError("--batch_size must equal balanced_mm_per_batch + balanced_um_per_batch")
+        batch_sampler = ModalityBalancedBatchSampler(
+            train_dataset,
+            args.balanced_mm_per_batch,
+            args.balanced_um_per_batch,
+            seed=args.seed,
+        )
+        print(f"Balanced batch sampler: {len(batch_sampler)} batches/epoch")
+
     if args.skip_save:
         args.save_strategy = "no"
 
@@ -273,7 +310,15 @@ def main():
         deepspeed=args.deepspeed or None,
     )
 
-    trainer = Trainer(
+    trainer_class = BalancedTrainer if use_balanced else Trainer
+    trainer = trainer_class(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        data_collator=data_collator,
+        processing_class=processor.tokenizer,
+        batch_sampler=batch_sampler,
+    ) if use_balanced else Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
