@@ -85,6 +85,7 @@ def parse_args():
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--max_steps", type=int, default=-1)
     parser.add_argument("--skip_save", action="store_true")
+    parser.add_argument("--deepspeed", default="")
     parser.add_argument("--resume", default="")
     parser.add_argument("--debug_labels", action="store_true")
     return parser.parse_args()
@@ -269,6 +270,7 @@ def main():
         gradient_checkpointing=args.gradient_checkpointing and not used_unsloth,
         seed=args.seed,
         data_seed=args.seed,
+        deepspeed=args.deepspeed or None,
     )
 
     trainer = Trainer(
