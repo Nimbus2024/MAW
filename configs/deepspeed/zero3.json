@@ -1,15 +1,23 @@
 {
-  "bf16": {"enabled": "auto"},
+  "bf16": {
+    "enabled": "auto"
+  },
   "zero_optimization": {
     "stage": 3,
-    "offload_optimizer": {"device": "none"},
-    "offload_param": {"device": "none"},
+    "offload_optimizer": {
+      "device": "none"
+    },
+    "offload_param": {
+      "device": "none"
+    },
     "overlap_comm": true,
     "contiguous_gradients": true,
     "stage3_gather_16bit_weights_on_model_save": true,
-    "reduce_bucket_size": "auto",
-    "stage3_prefetch_bucket_size": "auto",
-    "stage3_param_persistence_threshold": "auto"
+    "reduce_bucket_size": 500000000,
+    "stage3_prefetch_bucket_size": 50000000,
+    "stage3_param_persistence_threshold": 100000,
+    "stage3_max_live_parameters": 1000000000,
+    "stage3_max_reuse_distance": 1000000000
   },
   "gradient_accumulation_steps": "auto",
   "gradient_clipping": "auto",

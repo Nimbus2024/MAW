@@ -1,13 +1,19 @@
 {
-  "bf16": {"enabled": "auto"},
+  "bf16": {
+    "enabled": "auto"
+  },
   "zero_optimization": {
     "stage": 2,
-    "offload_optimizer": {"device": "none"},
-    "offload_param": {"device": "none"},
+    "offload_optimizer": {
+      "device": "none"
+    },
+    "offload_param": {
+      "device": "none"
+    },
     "overlap_comm": true,
     "contiguous_gradients": true,
-    "reduce_bucket_size": "auto",
-    "allgather_bucket_size": "auto"
+    "reduce_bucket_size": 500000000,
+    "allgather_bucket_size": 500000000
   },
   "gradient_accumulation_steps": "auto",
   "gradient_clipping": "auto",
