@@ -18,6 +18,9 @@ export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 if ! command -v "${PYTHON}" >/dev/null 2>&1 && [[ -x "${CODE_ROOT}/../venv_vllm/bin/python" ]]; then
   PYTHON="${CODE_ROOT}/../venv_vllm/bin/python"
 fi
+if [[ "${PYTHON}" == */* ]]; then
+  export PATH="$(cd "$(dirname "${PYTHON}")" && pwd):${PATH}"
+fi
 RESULTS_ROOT="${RESULTS_ROOT:-${CODE_ROOT}/../results}"
 DATA_SPLIT_DIR="${DATA_SPLIT_DIR:-${CODE_ROOT}/../dependencies/data/UMU-bench}"
 MODEL_DIR="${MODEL_DIR:-${CODE_ROOT}/../dependencies/models}"
