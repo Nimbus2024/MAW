@@ -14,6 +14,7 @@ set -euo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
+export VLLM_WORKER_MULTIPROC_METHOD="${VLLM_WORKER_MULTIPROC_METHOD:-spawn}"
 if ! command -v "${PYTHON}" >/dev/null 2>&1 && [[ -x "${CODE_ROOT}/../venv_vllm/bin/python" ]]; then
   PYTHON="${CODE_ROOT}/../venv_vllm/bin/python"
 fi

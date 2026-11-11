@@ -134,6 +134,7 @@ def combined_model_view(model_source: str, processor_source: str) -> str:
 
 class VLLMBackend:
     def __init__(self, args):
+        os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
         from vllm import LLM
 
         self.args = args
