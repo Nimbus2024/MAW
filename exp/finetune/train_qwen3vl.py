@@ -10,6 +10,13 @@ import inspect
 import json
 import os
 import random
+import sys
+
+if "--no-use_unsloth" not in sys.argv:
+    try:
+        import unsloth  # noqa: F401
+    except Exception:
+        pass
 
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model
