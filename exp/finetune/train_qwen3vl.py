@@ -6,6 +6,7 @@ the standard HF Trainer and this repo's parquet dataset layout.
 """
 
 import argparse
+import inspect
 import json
 import os
 import random
@@ -25,6 +26,17 @@ from .qwenvl.collator import DataCollatorForSupervisedDataset
 from .qwenvl.datasets import UmuQwenDataset
 from .qwenvl.processor import update_processor_pixels
 from .qwenvl.runtime import resolve_attn_implementation
+
+
+def resolve_optim() -> str:
+    if not torch.cuda.is_available():
+        return "adamw_torch"
+    try:
+        if "fused" in inspect.signature(torch.optim.AdamW).parameters:
+            return "adamw_torch_fused"
+    except Exception:
+        pass
+    return "adamw_torch"
 
 
 def parse_args():
@@ -229,7 +241,7 @@ def main():
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
         weight_decay=0.0,
-        optim="adamw_torch",
+        optim=resolve_optim(),
         bf16=args.bf16,
         logging_steps=args.logging_steps,
         logging_dir=args.logging_dir or os.path.join(checkpoint_dir, "tensorboard"),
@@ -239,7 +251,7 @@ def main():
         save_total_limit=args.save_total_limit,
         dataloader_num_workers=args.num_workers,
         remove_unused_columns=False,
-        gradient_checkpointing=args.gradient_checkpointing,
+        gradient_checkpointing=args.gradient_checkpointing and not used_unsloth,
         seed=args.seed,
         data_seed=args.seed,
     )

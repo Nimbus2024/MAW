@@ -47,11 +47,12 @@ QWEN3VL_REPO="${QWEN3VL_REPO:-Qwen/Qwen3-VL-8B-Instruct}"
 QWEN3VL_NAME="${QWEN3VL_NAME:-Qwen3-VL-8B-Instruct}"
 VLLM_VERSION="${VLLM_VERSION:-}"                            # 空 = 最新稳定版(曾用 0.11.0)
 FLASH_ATTN_VERSION="${FLASH_ATTN_VERSION:-}"                # 空 = 最新稳定版
+UNSLOTH_VERSION="${UNSLOTH_VERSION:-}"                      # 空 = 最新稳定版
 
 # ---------------------------------------------------------------------------
 # 参数
 # ---------------------------------------------------------------------------
-DO_PIP=0 DO_MODELS=0 DO_DATA=0 DO_QWEN3VL=0 DO_VLLM=0 DO_FLASH_ATTN=0 DO_VERIFY=0
+DO_PIP=0 DO_MODELS=0 DO_DATA=0 DO_QWEN3VL=0 DO_VLLM=0 DO_FLASH_ATTN=0 DO_UNSLOTH=0 DO_VERIFY=0
 SPECIFIED=0
 FORCE=0 DRY_RUN=0 YES=0
 TORCH_CU=""
@@ -88,6 +89,7 @@ setup_env.sh — 新服务器一键环境配置
   --data           下载数据集到 dependencies/data/UMU-bench/
   --vllm [VER]     vLLM (默认最新; auto 配到 torch cu128 时自动选 0.11.0)
   --flash-attn [VER] 安装 flash-attn (默认最新; 用于 Qwen3-VL 的 FA2)
+  --unsloth [VER]  安装 unsloth (可能调整 torch/transformers; 建议独立环境)
   --verify         下载后/对已有模型做 transformers 加载验证
   --all            等价 --pip --models --data --vllm
   --env-name NAME  conda 环境名(默认 maw), 首次自动创建
@@ -262,6 +264,16 @@ step_flash_attn() {
   python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
 }
 
+step_unsloth() {
+  local spec="unsloth"
+  [[ -n "$UNSLOTH_VERSION" ]] && spec="unsloth==${UNSLOTH_VERSION}"
+  echo "!! Unsloth may adjust torch/transformers; a dedicated env is recommended."
+  echo "== pip install ${spec} =="
+  pip install "$spec"
+  echo "== 验证 unsloth import =="
+  python -c "import unsloth; print('unsloth', getattr(unsloth, '__version__', '?'))"
+}
+
 step_verify() {
   python - <<'PY'
 import os, glob, sys, gc
@@ -319,6 +331,9 @@ while [[ $# -gt 0 ]]; do
     --flash-attn)  DO_FLASH_ATTN=1; SPECIFIED=1
                    shift
                    if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then FLASH_ATTN_VERSION="$1"; shift; fi ;;
+    --unsloth)     DO_UNSLOTH=1; SPECIFIED=1
+                   shift
+                   if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then UNSLOTH_VERSION="$1"; shift; fi ;;
     --verify)      DO_VERIFY=1; SPECIFIED=1; shift ;;
     --all)         DO_PIP=1; DO_MODELS=1; DO_DATA=1; DO_VLLM=1; SPECIFIED=1; shift ;;
     --env-name)    ENV_NAME="${2:-maw}"; shift 2 ;;
@@ -359,6 +374,7 @@ cat <<EOF
               ${DATA_REPO}  -> ${DATA_DIR}/${DATA_NAME}
   vllm     : $([[ $DO_VLLM = 1 ]] && echo yes || echo no)   (${VLLM_VERSION:-latest})
   flash-attn: $([[ $DO_FLASH_ATTN = 1 ]] && echo yes || echo no)   (${FLASH_ATTN_VERSION:-latest})
+  unsloth  : $([[ $DO_UNSLOTH = 1 ]] && echo yes || echo no)   (${UNSLOTH_VERSION:-latest})
   verify   : $([[ $DO_VERIFY = 1 ]] && echo yes || echo no)
   force    : ${FORCE}
 ===========================================================
@@ -389,6 +405,7 @@ ensure_hf_cli
 
 if [[ "$DO_PIP" == 1 ]]; then    step_pip; fi
 if [[ "$DO_FLASH_ATTN" == 1 ]]; then step_flash_attn; fi
+if [[ "$DO_UNSLOTH" == 1 ]]; then step_unsloth; fi
 if [[ "$DO_MODELS" == 1 ]]; then step_models; fi
 if [[ "$DO_QWEN3VL" == 1 ]]; then step_qwen3vl; fi
 if [[ "$DO_DATA" == 1 ]]; then   step_data; fi
