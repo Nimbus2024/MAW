@@ -102,6 +102,7 @@ MAW `results/ratio<N>/MAW/<algo>/<timestamp>/`；
 
 ```bash
 ./scripts/setup_env.sh --qwen3vl --yes
+./scripts/setup_env.sh --flash-attn --yes
 ./scripts/setup_env.sh --verify
 
 python -m exp.finetune.prepare_umu_qwen \
@@ -115,6 +116,11 @@ python -m exp.finetune.prepare_umu_qwen \
 
 ./scripts/run_check_qwen3vl.sh --stage_root ../qwen3vl_stage --n_train 200
 ```
+
+加速策略：默认开启 gradient checkpointing；装了 `flash-attn` 后自动用
+`flash_attention_2`（失败回退 `sdpa`）；装了 `unsloth` 后自动用 Unsloth 加载与
+LoRA（不可用时自动回退标准 HF 路径，`--no-use_unsloth` 可强制关闭）。
+Unsloth 对 torch/transformers 版本较敏感，建议单独环境安装，避免影响 vLLM。
 
 每次训练落在 `../qwen3vl_stage/<run_name>/<timestamp>/`，内部与仓库其它
 finetune/retrain 一致：`logs/{stdout.log,tensorboard/}`、`config/args.json`、

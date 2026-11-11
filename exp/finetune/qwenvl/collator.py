@@ -17,13 +17,13 @@ def _pad_position_ids(tensor_list):
 
 
 class DataCollatorForSupervisedDataset:
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, include_position_ids: bool = True):
         self.tokenizer = tokenizer
+        self.include_position_ids = include_position_ids
 
     def __call__(self, instances):
         input_ids = [instance["input_ids"].squeeze(0) for instance in instances]
         labels = [instance["labels"].squeeze(0) for instance in instances]
-        position_ids = [instance["position_ids"] for instance in instances]
 
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
@@ -31,19 +31,19 @@ class DataCollatorForSupervisedDataset:
         labels = torch.nn.utils.rnn.pad_sequence(
             labels, batch_first=True, padding_value=-100
         )
-        position_ids = _pad_position_ids(position_ids)
 
         max_length = self.tokenizer.model_max_length
         input_ids = input_ids[:, :max_length]
         labels = labels[:, :max_length]
-        position_ids = position_ids[:, :, :max_length]
 
         batch = {
             "input_ids": input_ids,
             "labels": labels,
             "attention_mask": input_ids.ne(self.tokenizer.pad_token_id),
-            "position_ids": position_ids,
         }
+        if self.include_position_ids:
+            position_ids = _pad_position_ids([instance["position_ids"] for instance in instances])
+            batch["position_ids"] = position_ids[:, :, :max_length]
 
         images = [instance["pixel_values"] for instance in instances if "pixel_values" in instance]
         if images:

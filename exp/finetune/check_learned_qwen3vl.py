@@ -16,6 +16,7 @@ from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
 from .qwenvl.datasets import load_eval_samples
 from .qwenvl.processor import build_eval_messages, update_processor_pixels
+from .qwenvl.runtime import resolve_attn_implementation
 
 
 def normalize(text: str) -> str:
@@ -90,6 +91,11 @@ def parse_args():
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--min_pixels", type=int, default=28 * 28 * 16)
     parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
+    parser.add_argument(
+        "--attn_implementation",
+        choices=("auto", "sdpa", "flash_attention_2", "eager"),
+        default="auto",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", default="")
     return parser.parse_args()
@@ -99,12 +105,23 @@ def main():
     args = parse_args()
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=os.path.isdir(args.model))
     update_processor_pixels(processor, args.min_pixels, args.max_pixels)
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
-        args.model,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        local_files_only=os.path.isdir(args.model),
-    )
+    attn_implementation = resolve_attn_implementation(args.attn_implementation)
+    load_kwargs = {
+        "torch_dtype": torch.bfloat16,
+        "device_map": "auto",
+        "local_files_only": os.path.isdir(args.model),
+    }
+    try:
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            args.model, attn_implementation=attn_implementation, **load_kwargs
+        )
+    except Exception as exc:
+        if attn_implementation != "flash_attention_2":
+            raise
+        print(f"!! flash_attention_2 failed ({exc}); falling back to sdpa")
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            args.model, attn_implementation="sdpa", **load_kwargs
+        )
     model.eval()
     device = next(model.parameters()).device
 

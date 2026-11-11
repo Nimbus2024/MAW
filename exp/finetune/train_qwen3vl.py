@@ -24,6 +24,7 @@ from .. import _paths
 from .qwenvl.collator import DataCollatorForSupervisedDataset
 from .qwenvl.datasets import UmuQwenDataset
 from .qwenvl.processor import update_processor_pixels
+from .qwenvl.runtime import resolve_attn_implementation
 
 
 def parse_args():
@@ -50,9 +51,10 @@ def parse_args():
     )
     parser.add_argument(
         "--attn_implementation",
-        choices=("sdpa", "flash_attention_2", "eager"),
-        default="sdpa",
+        choices=("auto", "sdpa", "flash_attention_2", "eager"),
+        default="auto",
     )
+    parser.add_argument("--use_unsloth", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--gradient_checkpointing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--logging_steps", type=int, default=10)
@@ -80,13 +82,24 @@ def load_processor(model_id, args):
     return processor
 
 
-def load_model(model_id, args):
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
-        model_id,
-        torch_dtype=torch.bfloat16 if args.bf16 else None,
-        attn_implementation=args.attn_implementation,
-        local_files_only=os.path.isdir(model_id),
-    )
+def _load_standard(model_id, args):
+    attn_implementation = resolve_attn_implementation(args.attn_implementation)
+    load_kwargs = {
+        "torch_dtype": torch.bfloat16 if args.bf16 else None,
+        "local_files_only": os.path.isdir(model_id),
+    }
+    try:
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            model_id, attn_implementation=attn_implementation, **load_kwargs
+        )
+    except Exception as exc:
+        if attn_implementation != "flash_attention_2":
+            raise
+        print(f"!! flash_attention_2 failed ({exc}); falling back to sdpa")
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            model_id, attn_implementation="sdpa", **load_kwargs
+        )
+    print(f"Loaded Qwen3-VL with attn_implementation={getattr(model.config, '_attn_implementation', attn_implementation)}")
     model.config.use_cache = False
 
     for parameter in model.parameters():
@@ -110,10 +123,69 @@ def load_model(model_id, args):
     return model
 
 
-def save_merged(model, processor, output_dir):
+def _load_unsloth(model_id, args):
+    try:
+        from unsloth import FastVisionModel
+    except Exception as exc:
+        print(f"Unsloth not available ({exc}); using standard HF model")
+        return None
+    try:
+        model, _ = FastVisionModel.from_pretrained(
+            model_id,
+            load_in_4bit=False,
+            use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
+            max_seq_length=args.max_length,
+        )
+        model = FastVisionModel.get_peft_model(
+            model,
+            finetune_vision_layers=False,
+            finetune_language_layers=True,
+            finetune_attention_modules=True,
+            finetune_mlp_modules=True,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            random_state=args.seed,
+            use_rslora=False,
+            loftq_config=None,
+            use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
+        )
+        model.config.use_cache = False
+        FastVisionModel.for_training(model)
+        for name, parameter in model.named_parameters():
+            if "merger" in name:
+                parameter.requires_grad = False
+        model.print_trainable_parameters()
+        print("Loaded Qwen3-VL with Unsloth")
+        return model
+    except Exception as exc:
+        print(f"Unsloth load failed ({exc}); using standard HF model")
+        return None
+
+
+def load_model(model_id, args):
+    if args.use_unsloth:
+        model = _load_unsloth(model_id, args)
+        if model is not None:
+            return model, True
+    return _load_standard(model_id, args), False
+
+
+def save_merged(model, processor, output_dir, used_unsloth=False):
+    os.makedirs(output_dir, exist_ok=True)
+    if used_unsloth and hasattr(model, "save_pretrained_merged"):
+        try:
+            model.config.use_cache = True
+            model.save_pretrained_merged(
+                output_dir, processor.tokenizer, save_method="merged_16bit"
+            )
+            processor.save_pretrained(output_dir)
+            return
+        except Exception as exc:
+            print(f"!! Unsloth merged save failed ({exc}); falling back to HF merge")
     model = model.merge_and_unload() if isinstance(model, PeftModel) else model
     model.config.use_cache = True
-    os.makedirs(output_dir, exist_ok=True)
     model.save_pretrained(output_dir, safe_serialization=True, max_shard_size="5GB")
     processor.save_pretrained(output_dir)
 
@@ -124,7 +196,6 @@ def main():
     random.seed(args.seed)
 
     processor = load_processor(args.model_id, args)
-    model = load_model(args.model_id, args)
 
     train_dataset = UmuQwenDataset(
         args.parquet,
@@ -132,7 +203,6 @@ def main():
         modalities=args.modalities,
         max_samples=args.max_samples,
     )
-    data_collator = DataCollatorForSupervisedDataset(processor.tokenizer)
 
     if args.debug_labels:
         sample = train_dataset[0]
@@ -141,6 +211,11 @@ def main():
         print("LABELS:", processor.tokenizer.decode(kept, skip_special_tokens=False))
         print("POSITION_IDS_SHAPE:", tuple(sample["position_ids"].shape))
         return
+
+    model, used_unsloth = load_model(args.model_id, args)
+    data_collator = DataCollatorForSupervisedDataset(
+        processor.tokenizer, include_position_ids=not used_unsloth
+    )
 
     checkpoint_dir = args.checkpoint_dir or os.path.join(args.output_dir, "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -180,7 +255,7 @@ def main():
     trainer.save_state()
 
     unwrapped = trainer.accelerator.unwrap_model(trainer.model)
-    save_merged(unwrapped, processor, args.output_dir)
+    save_merged(unwrapped, processor, args.output_dir, used_unsloth)
 
     with open(os.path.join(args.output_dir, "train_args.json"), "w", encoding="utf-8") as handle:
         json.dump(
@@ -188,6 +263,7 @@ def main():
                 "cli": vars(args),
                 "trainer": training_args.to_dict(),
                 "num_train_samples": len(train_dataset),
+                "used_unsloth": used_unsloth,
             },
             handle,
             ensure_ascii=False,
