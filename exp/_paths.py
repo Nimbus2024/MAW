@@ -24,6 +24,9 @@ VANILLA = model_dir("llava-1.5-7b-hf")  # 原始基座（直接评估 / retrain 
 ORIGIN = model_dir("llava_smu_ft")      # 微调基线（遗忘方法的 policy/π_ref 起点）
 UMU_BENCH = umu_bench_dir()             # 数据集根（含 forget_5/retain_95/real_person/full_data）
 
+QWEN3VL_VANILLA = model_dir(os.environ.get("QWEN3VL_VANILLA_NAME", "Qwen3-VL-8B-Instruct"))
+QWEN3VL_ORIGIN = model_dir(os.environ.get("QWEN3VL_ORIGIN_NAME", "qwen3_vl_smu_ft"))
+
 
 def is_llava(ref) -> bool:
     """宽容识别 LLaVA 模型族：接受 repo id(如 llava-hf/llava-1.5-7b-hf)
@@ -31,3 +34,17 @@ def is_llava(ref) -> bool:
     s = str(ref).rstrip("/")
     base = os.path.basename(s)
     return base.lower().startswith("llava") or s.lower().startswith("llava")
+
+
+def is_qwen3vl(ref) -> bool:
+    s = str(ref).rstrip("/").lower()
+    base = os.path.basename(s)
+    return "qwen3-vl" in base or "qwen3_vl" in base or "qwen3-vl" in s
+
+
+def family(ref) -> str:
+    if is_llava(ref):
+        return "llava"
+    if is_qwen3vl(ref):
+        return "qwen3vl"
+    return "unknown"

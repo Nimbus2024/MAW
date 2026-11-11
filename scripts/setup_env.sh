@@ -21,6 +21,7 @@ CODE_ROOT="${CODE_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 DEP_ROOT="${DEP_ROOT:-${CODE_ROOT}/../dependencies}"
 MODEL_DIR="${MODEL_DIR:-${DEP_ROOT}/models}"
 DATA_DIR="${DATA_DIR:-${DEP_ROOT}/data}"
+export MODEL_DIR DATA_DIR
 
 ENV_NAME="${ENV_NAME:-maw}"          # conda 环境名
 ENV_PY="${ENV_PY:-3.10}"             # python 版本
@@ -42,12 +43,14 @@ ORIGIN_REPO="${ORIGIN_REPO:-${HF_SOURCE}/llava_smu_ft}"
 ORIGIN_NAME="llava_smu_ft"
 DATA_REPO="${DATA_REPO:-${HF_SOURCE}/UMU-bench}"
 DATA_NAME="UMU-bench"
+QWEN3VL_REPO="${QWEN3VL_REPO:-Qwen/Qwen3-VL-8B-Instruct}"
+QWEN3VL_NAME="${QWEN3VL_NAME:-Qwen3-VL-8B-Instruct}"
 VLLM_VERSION="${VLLM_VERSION:-}"                            # 空 = 最新稳定版(曾用 0.11.0)
 
 # ---------------------------------------------------------------------------
 # 参数
 # ---------------------------------------------------------------------------
-DO_PIP=0 DO_MODELS=0 DO_DATA=0 DO_VLLM=0 DO_VERIFY=0
+DO_PIP=0 DO_MODELS=0 DO_DATA=0 DO_QWEN3VL=0 DO_VLLM=0 DO_VERIFY=0
 SPECIFIED=0
 FORCE=0 DRY_RUN=0 YES=0
 TORCH_CU=""
@@ -80,6 +83,7 @@ setup_env.sh — 新服务器一键环境配置
   --torch [cu]     torch/torchvision: cu118|cu121|cu126|cu128 指定, auto 由驱动推断;
                    有卡且未装 torch 时自动(auto); 无卡需显式给 cuXXX
   --models         下载模型到 dependencies/models/
+  --qwen3vl        下载 Qwen3-VL-8B-Instruct 到 dependencies/models/
   --data           下载数据集到 dependencies/data/UMU-bench/
   --vllm [VER]     vLLM (默认最新; auto 配到 torch cu128 时自动选 0.11.0)
   --verify         下载后/对已有模型做 transformers 加载验证
@@ -229,6 +233,10 @@ step_models() {
   dl_hf "$ORIGIN_REPO"  "model" "${MODEL_DIR}/${ORIGIN_NAME}"    # 角色: origin(=参考项目 oracle)
 }
 
+step_qwen3vl() {
+  dl_hf "$QWEN3VL_REPO" "model" "${MODEL_DIR}/${QWEN3VL_NAME}"
+}
+
 step_data() {
   dl_hf "$DATA_REPO" "dataset" "${DATA_DIR}/${DATA_NAME}"
 }
@@ -246,7 +254,7 @@ step_verify() {
   python - <<'PY'
 import os, glob, sys, gc
 import torch
-from transformers import LlavaForConditionalGeneration, AutoProcessor
+from transformers import AutoConfig, AutoProcessor
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "")
 dirs = sorted(
@@ -260,10 +268,18 @@ ok = True
 for d in dirs:
     try:
         print(f"== 加载验证: {d} ==", flush=True)
-        m = LlavaForConditionalGeneration.from_pretrained(
+        config = AutoConfig.from_pretrained(d, local_files_only=True)
+        model_type = getattr(config, "model_type", "")
+        if model_type == "qwen3_vl":
+            from transformers import Qwen3VLForConditionalGeneration as ModelClass
+        elif model_type.startswith("llava"):
+            from transformers import LlavaForConditionalGeneration as ModelClass
+        else:
+            raise ValueError(f"unsupported model_type: {model_type!r}")
+        m = ModelClass.from_pretrained(
             d, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, local_files_only=True)
         AutoProcessor.from_pretrained(d, local_files_only=True)
-        print(f"OK {os.path.basename(d)} params={m.num_parameters()}", flush=True)
+        print(f"OK {os.path.basename(d)} ({model_type}) params={m.num_parameters()}", flush=True)
         del m
     except Exception as e:
         ok = False
@@ -283,6 +299,7 @@ while [[ $# -gt 0 ]]; do
                    shift
                    if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then TORCH_CU="$1"; shift; fi ;;
     --models)      DO_MODELS=1; SPECIFIED=1; shift ;;
+    --qwen3vl)     DO_QWEN3VL=1; SPECIFIED=1; shift ;;
     --data)        DO_DATA=1; SPECIFIED=1; shift ;;
     --vllm)        DO_VLLM=1; SPECIFIED=1
                    shift
@@ -321,6 +338,8 @@ cat <<EOF
   models   : $([[ $DO_MODELS = 1 ]] && echo yes || echo no)
               vanilla -> ${VANILLA_REPO}  (${MODEL_DIR}/${VANILLA_NAME})
               origin  -> ${ORIGIN_REPO}   (${MODEL_DIR}/${ORIGIN_NAME})   [参考项目称 oracle]
+  qwen3vl  : $([[ $DO_QWEN3VL = 1 ]] && echo yes || echo no)
+              ${QWEN3VL_REPO} -> ${MODEL_DIR}/${QWEN3VL_NAME}
   data     : $([[ $DO_DATA = 1 ]] && echo yes || echo no)
               ${DATA_REPO}  -> ${DATA_DIR}/${DATA_NAME}
   vllm     : $([[ $DO_VLLM = 1 ]] && echo yes || echo no)   (${VLLM_VERSION:-latest})
@@ -354,6 +373,7 @@ ensure_hf_cli
 
 if [[ "$DO_PIP" == 1 ]]; then    step_pip; fi
 if [[ "$DO_MODELS" == 1 ]]; then step_models; fi
+if [[ "$DO_QWEN3VL" == 1 ]]; then step_qwen3vl; fi
 if [[ "$DO_DATA" == 1 ]]; then   step_data; fi
 if [[ "$DO_VLLM" == 1 ]]; then   step_vllm; fi
 if [[ "$DO_VERIFY" == 1 ]]; then step_verify; fi
@@ -363,6 +383,7 @@ cat <<EOF
 =================== setup_env 完成 ===================
   环境    : ${ENV_NAME} (激活: conda activate ${ENV_NAME})
   模型    : ${MODEL_DIR}/{${VANILLA_NAME}, ${ORIGIN_NAME}}
+  Qwen3VL : ${MODEL_DIR}/${QWEN3VL_NAME}
   数据    : ${DATA_DIR}/${DATA_NAME}
   日志    : ${LOG_FILE}
 =======================================================

@@ -11,6 +11,10 @@
 ├── scripts/                 # 批处理脚本：setup_env.sh(建环境) / run_unlearn.sh / run_retrain.sh / run_eval.sh
 └── exp/                     # 实验功能程序（Python 包，以 python -m exp.<task>.<mod> 运行）
     ├── finetune/            # 微调（ft_dataset / finetune / info_pre）
+    │                        #   qwenvl/  官方 Qwen3-VL 数据/loss/mRoPE（vendored）
+    │                        #   train_qwen3vl.py  Qwen3-VL origin SFT
+    │                        #   check_learned_qwen3vl.py  训练后自测
+    │                        #   prepare_umu_qwen.py  数据预检/manifest
     ├── unlearn/             # 遗忘：统一框架 + 可插拔目标
     │                        #   framework.py  唯一训练入口(--objective/--gamma_mode)
     │                        #   objectives.py GA/NPO/simPO/DPO 的 loss(+ KLmin 占位)
@@ -87,6 +91,39 @@ cd code
 MAW `results/ratio<N>/MAW/<algo>/<timestamp>/`；
 内含 `logs/{stdout.log,tensorboard/}`、`config/args.json`（含 `group/objective/gamma_mode`）、
 `model/`（最终）、`runs/<epoch>/{model,metrics}`（逐 epoch）。
+
+## Qwen3-VL origin（补充 baseline）
+
+官方 Qwen3-VL 的数据模板、assistant-only loss、3D mRoPE 已 vendored 到
+`exp/finetune/qwenvl/`（上游 QwenLM/Qwen3-VL，Apache-2.0）。训练用 `full_data`
+的 MM_QA，仅 LLM LoRA，vision tower 与 projector 冻结；`real_person` 不参与训练，
+用作独立测试集。训练循环按官方用 HF `Trainer`（不是 LLaVA 的 Accelerator 手写循环），
+数据/合并保存/产物布局与本仓库 finetune/retrain 对齐。
+
+```bash
+./scripts/setup_env.sh --qwen3vl --yes
+./scripts/setup_env.sh --verify
+
+python -m exp.finetune.prepare_umu_qwen \
+  --full_parquet ../dependencies/data/UMU-bench/full_data/train-00000-of-00001.parquet \
+  --real_parquet ../dependencies/data/UMU-bench/real_person/train-00000-of-00001.parquet \
+  --out_dir ../qwen3vl_stage/data
+
+./scripts/run_finetune_qwen3vl.sh \
+  --stage_root ../qwen3vl_stage --run_name qwen3_vl_smu_ft_mm_ep1 \
+  --modalities mm --epochs 1
+
+./scripts/run_check_qwen3vl.sh --stage_root ../qwen3vl_stage --n_train 200
+```
+
+每次训练落在 `../qwen3vl_stage/<run_name>/<timestamp>/`，内部与仓库其它
+finetune/retrain 一致：`logs/{stdout.log,tensorboard/}`、`config/args.json`、
+`model/`（merged 模型 + processor）。`check` 自动选该 stage 下最新的 `model/`。
+直接调 Python 时兼容仓库旧参数名：`--data_dir`、`--save_dir`、`--num_epochs`。
+
+产物默认在服务器 `<项目根>/qwen3vl_stage/`，随后 rsync 回本地
+`references/qwen3-VL-8B-FT/`。Qwen3-VL 与 LLaVA 的 origin/vanilla 不共用同一套
+结果目录，避免记录混表。
 
 ## 约定
 
