@@ -65,6 +65,7 @@ def parse_args():
     parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--lora_dropout", type=float, default=0.0)
+    parser.add_argument("--init_adapter", default="")
     parser.add_argument(
         "--lora_targets",
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
@@ -127,18 +128,22 @@ def _load_standard(model_id, args):
     print(f"Loaded Qwen3-VL with attn_implementation={getattr(model.config, '_attn_implementation', attn_implementation)}")
     model.config.use_cache = False
 
-    for parameter in model.parameters():
-        parameter.requires_grad = False
+    if args.init_adapter:
+        model = PeftModel.from_pretrained(model, args.init_adapter, is_trainable=True)
+        print(f"Initialized LoRA adapter from {args.init_adapter}")
+    else:
+        for parameter in model.parameters():
+            parameter.requires_grad = False
 
-    lora_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        target_modules=[item.strip() for item in args.lora_targets.split(",") if item.strip()],
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, lora_config)
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=[item.strip() for item in args.lora_targets.split(",") if item.strip()],
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
     if args.gradient_checkpointing:
@@ -190,6 +195,8 @@ def _load_unsloth(model_id, args):
 
 
 def load_model(model_id, args):
+    if args.init_adapter:
+        return _load_standard(model_id, args), False
     if args.use_unsloth:
         model = _load_unsloth(model_id, args)
         if model is not None:
