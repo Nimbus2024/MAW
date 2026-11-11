@@ -83,6 +83,8 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument("--max_steps", type=int, default=-1)
+    parser.add_argument("--skip_save", action="store_true")
     parser.add_argument("--resume", default="")
     parser.add_argument("--debug_labels", action="store_true")
     return parser.parse_args()
@@ -213,6 +215,8 @@ def main():
     args = parse_args()
     set_seed(args.seed)
     random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
     processor = load_processor(args.model_id, args)
 
@@ -245,6 +249,7 @@ def main():
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
         num_train_epochs=args.epochs,
+        max_steps=args.max_steps,
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
         weight_decay=0.0,
@@ -271,8 +276,31 @@ def main():
         processing_class=processor.tokenizer,
     )
     trainer.train(resume_from_checkpoint=args.resume or None)
-    trainer.save_state()
 
+    if args.skip_save:
+        os.makedirs(args.output_dir, exist_ok=True)
+        last = trainer.state.log_history[-1] if trainer.state.log_history else {}
+        benchmark = {
+            "args": vars(args),
+            "used_unsloth": used_unsloth,
+            "attn_implementation": str(getattr(model.config, "_attn_implementation", "")),
+            "global_step": trainer.state.global_step,
+            "train_runtime": last.get("train_runtime"),
+            "train_samples_per_second": last.get("train_samples_per_second"),
+            "train_steps_per_second": last.get("train_steps_per_second"),
+            "train_loss": last.get("train_loss"),
+            "peak_memory_gb": (
+                torch.cuda.max_memory_allocated() / 1024**3
+                if torch.cuda.is_available()
+                else None
+            ),
+        }
+        with open(os.path.join(args.output_dir, "benchmark.json"), "w", encoding="utf-8") as handle:
+            json.dump(benchmark, handle, ensure_ascii=False, indent=2, default=str)
+        print(json.dumps(benchmark, ensure_ascii=False, indent=2))
+        return
+
+    trainer.save_state()
     unwrapped = trainer.accelerator.unwrap_model(trainer.model)
     save_merged(unwrapped, processor, args.output_dir, used_unsloth)
 
