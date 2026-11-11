@@ -14,9 +14,19 @@ set -euo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
+if ! command -v "${PYTHON}" >/dev/null 2>&1 && [[ -x "${CODE_ROOT}/../venv_vllm/bin/python" ]]; then
+  PYTHON="${CODE_ROOT}/../venv_vllm/bin/python"
+fi
 RESULTS_ROOT="${RESULTS_ROOT:-${CODE_ROOT}/../results}"
 DATA_SPLIT_DIR="${DATA_SPLIT_DIR:-${CODE_ROOT}/../dependencies/data/UMU-bench}"
-ORIGIN_DIR="${ORIGIN_DIR:-${CODE_ROOT}/../dependencies/models/llava_smu_ft}"
+MODEL_DIR="${MODEL_DIR:-${CODE_ROOT}/../dependencies/models}"
+ORIGIN_DIR="${ORIGIN_DIR:-${MODEL_DIR}/llava_smu_ft}"
+MODEL_FAMILY="${MODEL_FAMILY:-llava}"
+if [[ "${MODEL_FAMILY}" == "qwen3vl" ]]; then
+  PROCESSOR_DIR="${PROCESSOR_DIR:-${MODEL_DIR}/Qwen3-VL-8B-Instruct}"
+else
+  PROCESSOR_DIR="${PROCESSOR_DIR:-${ORIGIN_DIR}}"
+fi
 
 LABEL="${1:-}"
 [ -n "${LABEL}" ] || { echo "用法: $0 <LABEL> [eval_vllm args...]" >&2; exit 1; }
@@ -25,7 +35,7 @@ shift
 TS="$(date +%Y%m%d_%H%M%S)"
 RUN_DIR="${RESULTS_ROOT}/${LABEL}/${TS}"
 METRICS_DIR="${RUN_DIR}/metrics"
-mkdir -p "${METRICS_DIR}"
+mkdir -p "${METRICS_DIR}" "${RUN_DIR}/logs/tensorboard"
 exec > >(tee "${RUN_DIR}/logs/stdout.log") 2>&1
 echo "== [$(date +%H:%M:%S)] eval run dir: ${RUN_DIR} =="
 echo "== 输出日志: ${RUN_DIR}/logs/stdout.log =="
@@ -33,7 +43,7 @@ echo "== 输出日志: ${RUN_DIR}/logs/stdout.log =="
 (
   cd "${CODE_ROOT}"
   "${PYTHON}" -m exp.eval.eval_vllm \
-    --processor_path "${ORIGIN_DIR}" \
+    --processor_path "${PROCESSOR_DIR}" \
     --data_split_folder "${DATA_SPLIT_DIR}" \
     --task_data "${DATA_SPLIT_DIR}/full_data/train-00000-of-00001.parquet" \
     --test_data "${DATA_SPLIT_DIR}/full_data/train-00000-of-00001.parquet" \
@@ -41,7 +51,7 @@ echo "== 输出日志: ${RUN_DIR}/logs/stdout.log =="
     --output_folder "${METRICS_DIR}" \
     --output_file "${LABEL}_results" \
     --forget_ratio "${FORGET_RATIO:-5}" \
-    --batch_size "${EVAL_BATCH:-32}" --tensor_parallel_size "${TP_SIZE:-4}" \
+    --batch_size "${EVAL_BATCH:-32}" --tensor_parallel_size "${TP_SIZE:-1}" \
     --max_model_len 4096 \
     "$@"
 )

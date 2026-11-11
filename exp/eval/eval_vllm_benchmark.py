@@ -11,6 +11,7 @@ from transformers import (
     AutoProcessor,
     LlavaForConditionalGeneration,
     Qwen2_5_VLForConditionalGeneration,
+    Qwen3VLForConditionalGeneration,
 )
 import pandas as pd
 import random
@@ -193,11 +194,14 @@ def build_model_prompt(question, include_image, processor, model_id):
 
 
 def is_qwen_model(model_id, processor=None):
-    """Identify Qwen2.5-VL from a model ID/path or loaded processor."""
+    """Identify Qwen2.5-VL/Qwen3-VL from a model ID/path or loaded processor."""
     model_name = str(model_id).casefold()
-    if "qwen2.5-vl" in model_name or "qwen_vanilla" in model_name:
+    if "qwen2.5-vl" in model_name or "qwen3-vl" in model_name or "qwen_vanilla" in model_name:
         return True
-    return processor is not None and processor.__class__.__name__.startswith("Qwen2_5_VL")
+    if processor is None:
+        return False
+    name = processor.__class__.__name__
+    return name.startswith("Qwen2_5_VL") or name.startswith("Qwen3VL")
 
 
 def build_qwen_few_shot_prompt(processor, demonstrations, question, image=None):
@@ -1192,7 +1196,7 @@ def main():
         processor_source = args.processor_path
     elif (
         qwen_model
-        and ("qwen_vanilla" in args.model_id.casefold() or os.path.isdir(args.model_id))
+        and "qwen_vanilla" in args.model_id.casefold()
         and (Path(__file__).resolve().parent / "Qwen_Vanilla/processor").is_dir()
     ):
         processor_source = str(Path(__file__).resolve().parent / "Qwen_Vanilla/processor")
@@ -1212,9 +1216,15 @@ def main():
     model_source = args.model_id if args.pretrain else args.cache_path
     model_is_local = os.path.isdir(model_source)
     model_config = AutoConfig.from_pretrained(model_source, local_files_only=model_is_local)
-    if getattr(model_config, "model_type", "") == "qwen2_5_vl":
-        print("Loading Qwen2.5-VL model with FlashAttention 2...")
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model_type = getattr(model_config, "model_type", "")
+    if model_type in ("qwen2_5_vl", "qwen3_vl"):
+        print(f"Loading {model_type} model with FlashAttention 2...")
+        model_class = (
+            Qwen3VLForConditionalGeneration
+            if model_type == "qwen3_vl"
+            else Qwen2_5_VLForConditionalGeneration
+        )
+        model = model_class.from_pretrained(
             model_source,
             torch_dtype=torch.bfloat16,
             device_map="auto",
@@ -1222,7 +1232,7 @@ def main():
             local_files_only=model_is_local,
             attn_implementation=args.attn_implementation,
         )
-    elif getattr(model_config, "model_type", "").startswith("llava"):
+    elif model_type.startswith("llava"):
         print("Loading LLaVA model...")
         model = LlavaForConditionalGeneration.from_pretrained(
             model_source,

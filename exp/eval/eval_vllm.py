@@ -54,6 +54,8 @@ def parse_args():
     parser.add_argument("--forget_ratio", type=int, default=5)
     parser.add_argument("--max_eval_samples", type=int)
     parser.add_argument("--max_questions_per_group", type=int)
+    parser.add_argument("--min_pixels", type=int, default=28 * 28 * 16)
+    parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--max_new_tokens", type=int, default=50)
@@ -132,6 +134,7 @@ class VLLMBackend:
 
         self.args = args
         self.merged_dir = None
+        self.is_qwen3vl = False
         self.model_source = args.model_id if args.pretrain else args.cache_path
         self.lora_path = None
         if not args.pretrain and Path(self.model_source).is_dir() and (Path(self.model_source) / "adapter_config.json").exists():
@@ -142,9 +145,19 @@ class VLLMBackend:
             self.merged_dir = merged_dir
             if not (merged_dir / "model.safetensors.index.json").exists():
                 from peft import PeftModel
-                from transformers import LlavaForConditionalGeneration
+                from transformers import AutoConfig as HFConfig
+
+                base_config = HFConfig.from_pretrained(
+                    base_source, local_files_only=Path(base_source).is_dir()
+                )
+                if base_config.model_type == "qwen3_vl":
+                    from transformers import Qwen3VLForConditionalGeneration as BaseClass
+                elif base_config.model_type.startswith("llava"):
+                    from transformers import LlavaForConditionalGeneration as BaseClass
+                else:
+                    raise ValueError(f"Unsupported adapter base model_type={base_config.model_type!r}")
                 print(f"Merging LoRA adapter into {base_source} for vLLM...", flush=True)
-                base = LlavaForConditionalGeneration.from_pretrained(
+                base = BaseClass.from_pretrained(
                     base_source, torch_dtype="auto", low_cpu_mem_usage=True,
                     local_files_only=Path(base_source).is_dir())
                 merged = PeftModel.from_pretrained(base, self.model_source).merge_and_unload()
@@ -161,26 +174,26 @@ class VLLMBackend:
             local_files_only=Path(self.model_source).is_dir(),
         )
         model_type = getattr(config, "model_type", "")
-        if model_type == "qwen2_5_vl":
+        if model_type in ("qwen2_5_vl", "qwen3_vl"):
             self.kind = "qwen"
+            self.is_qwen3vl = model_type == "qwen3_vl"
         elif model_type.startswith("llava"):
             self.kind = "llava"
         else:
-            raise ValueError(f"Unsupported model_type={model_type!r}; expected Qwen2.5-VL or LLaVA")
+            raise ValueError(f"Unsupported model_type={model_type!r}; expected Qwen2.5-VL, Qwen3-VL, or LLaVA")
 
         if args.processor_path:
             processor_id = args.processor_path
-        elif self.kind == "qwen" and Path("Qwen_Vanilla/processor").is_dir():
+        elif self.kind == "qwen" and not self.is_qwen3vl and Path("Qwen_Vanilla/processor").is_dir():
             processor_id = "Qwen_Vanilla/processor"
         else:
             processor_id = args.model_id
         self.processor_source = resolve_processor_source(processor_id)
-        # Match eval.py's Transformers 4.51 preprocessing instead of the fast
-        # processor that newer Transformers versions enable by default.
+        processor_kwargs = {"local_files_only": True}
+        if not self.is_qwen3vl:
+            processor_kwargs["use_fast"] = False
         self.processor = AutoProcessor.from_pretrained(
-            self.processor_source,
-            local_files_only=True,
-            use_fast=False,
+            self.processor_source, **processor_kwargs
         )
         self.processor.tokenizer.padding_side = "left"
         try:
@@ -189,12 +202,9 @@ class VLLMBackend:
                 local_files_only=Path(self.model_source).is_dir(),
             )
         except (OSError, ValueError):
-            # Some merged training checkpoints omit generation_config.json;
-            # use the matching vanilla checkpoint's config in that case.
-            fallback = "Qwen_Vanilla" if self.kind == "qwen" else "LLaVA_Vanilla"
+            fallback = args.processor_path or args.model_id
             generation_config = GenerationConfig.from_pretrained(
-                fallback,
-                local_files_only=True,
+                fallback, local_files_only=Path(fallback).is_dir()
             )
         self.repetition_penalty = float(
             getattr(generation_config, "repetition_penalty", 1.0) or 1.0
@@ -209,6 +219,13 @@ class VLLMBackend:
         dtype = args.dtype
         if dtype == "auto":
             dtype = "bfloat16" if self.kind == "qwen" else "float16"
+        if self.is_qwen3vl:
+            mm_processor_kwargs = {
+                "min_pixels": args.min_pixels,
+                "max_pixels": args.max_pixels,
+            }
+        else:
+            mm_processor_kwargs = {"use_fast": False, "num_additional_image_tokens": 1}
         print(f"Loading {self.kind} with vLLM from {engine_source}")
         try:
             self.llm = LLM(
@@ -219,7 +236,7 @@ class VLLMBackend:
                 max_model_len=args.max_model_len,
                 gpu_memory_utilization=args.gpu_memory_utilization,
                 limit_mm_per_prompt={"image": 1},
-                mm_processor_kwargs={"use_fast": False, "num_additional_image_tokens": 1},
+                mm_processor_kwargs=mm_processor_kwargs,
                 enforce_eager=True,
             )
         except Exception:
