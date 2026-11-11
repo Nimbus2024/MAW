@@ -128,6 +128,8 @@ python -m exp.finetune.prepare_umu_qwen \
 finetune/retrain 一致：`logs/{stdout.log,tensorboard/}`、`config/args.json`、
 `model/`（merged 模型 + processor）。`check` 自动选该 stage 下最新的 `model/`。
 直接调 Python 时兼容仓库旧参数名：`--data_dir`、`--save_dir`、`--num_epochs`。
+默认每个 epoch 保存 checkpoint 到 `checkpoints/`（`--save_strategy epoch`，默认不限制
+保留数量）；多 epoch 实验可用 `--resume <checkpoint>` 续跑。
 
 产物默认在服务器 `<项目根>/qwen3vl_stage/`，随后 rsync 回本地
 `references/qwen3-VL-8B-FT/`。Qwen3-VL 与 LLaVA 的 origin/vanilla 不共用同一套

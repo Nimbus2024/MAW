@@ -77,9 +77,9 @@ def parse_args():
     parser.add_argument("--gradient_checkpointing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--save_strategy", choices=("no", "epoch", "steps"), default="no")
+    parser.add_argument("--save_strategy", choices=("no", "epoch", "steps"), default="epoch")
     parser.add_argument("--save_steps", type=int, default=500)
-    parser.add_argument("--save_total_limit", type=int, default=2)
+    parser.add_argument("--save_total_limit", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_samples", type=int, default=None)
@@ -239,6 +239,9 @@ def main():
     data_collator = DataCollatorForSupervisedDataset(
         processor.tokenizer, include_position_ids=not used_unsloth
     )
+
+    if args.skip_save:
+        args.save_strategy = "no"
 
     checkpoint_dir = args.checkpoint_dir or os.path.join(args.output_dir, "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
