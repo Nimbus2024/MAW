@@ -57,6 +57,17 @@ CMD=("${PYTHON}" -m exp.finetune.train_qwen3vl \
 if ((${#EXTRA[@]})); then
   CMD+=("${EXTRA[@]}")
 fi
+for arg in "${EXTRA[@]}"; do
+  if [[ "${arg}" == "--deepspeed" ]]; then
+    export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+    export MASTER_PORT="${MASTER_PORT:-$(shuf -i 20000-29999 -n 1)}"
+    export RANK=0 WORLD_SIZE=1 LOCAL_RANK=0 DS_BUILD_OPS=0
+    if [[ "${PYTHON}" == */* ]]; then
+      export PATH="$(cd "$(dirname "${PYTHON}")" && pwd):${PATH}"
+    fi
+    break
+  fi
+done
 "${CMD[@]}"
 
 if [[ -f "${FINAL_DIR}/train_args.json" ]]; then
