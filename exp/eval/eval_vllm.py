@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--max_new_tokens", type=int, default=50)
+    parser.add_argument("--max_new_tokens", type=int, default=128)
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument(
         "--attn_implementation",
@@ -498,8 +498,12 @@ def fill_jobs(path, mode, forget_file, args):
         per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Mask_Task"], args):
             kind = item["Type"]
-            prompt = item["Question"].replace("__", "[Blank]")
-            prompt += "\nPlease **ONLY** provide the correct answer that should replace the [Blank]."
+            prompt = item["Question"]
+            if "__" in prompt:
+                prompt = prompt.replace("__", "[Blank]")
+                prompt += "\nPlease **ONLY** provide the correct answer that should fill the [Blank]."
+            else:
+                prompt += "\nPlease **ONLY** provide the correct answer without any explanation."
             prompt += args.prompt_suffix
             jobs.append(Job(
                 question=prompt,
