@@ -145,6 +145,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Check Qwen3-VL UMU origin fit and generalization")
     parser.add_argument("--model", required=True)
     parser.add_argument("--train_parquet", required=True)
+    parser.add_argument("--train_modality", choices=("mm", "um"), default="mm")
     parser.add_argument("--real_parquet", required=True)
     parser.add_argument("--n_train", type=int, default=200)
     parser.add_argument("--n_real", type=int, default=200)
@@ -187,7 +188,7 @@ def main():
     device = next(model.parameters()).device
 
     train_samples = load_eval_samples(
-        args.train_parquet, modality="mm", limit=args.n_train, seed=args.seed
+        args.train_parquet, modality=args.train_modality, limit=args.n_train, seed=args.seed
     )
     real_limit = None if args.n_real <= 0 else args.n_real
     real_samples = load_eval_samples(
