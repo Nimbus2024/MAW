@@ -58,7 +58,8 @@ def parse_args():
     parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--max_new_tokens", type=int, default=128)
+    parser.add_argument("--max_new_tokens", type=int, default=50)
+    parser.add_argument("--max_generation_tokens", type=int, default=128)
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument(
         "--attn_implementation",
@@ -93,8 +94,9 @@ def validate_args(args):
     for name in ("batch_size", "max_model_len", "tensor_parallel_size"):
         if getattr(args, name) < 1:
             raise ValueError(f"--{name} must be positive")
-    if args.max_new_tokens < 1:
-        raise ValueError("--max_new_tokens must be positive")
+    for name in ("max_new_tokens", "max_generation_tokens"):
+        if getattr(args, name) < 1:
+            raise ValueError(f"--{name} must be positive")
     for name in ("max_eval_samples", "max_questions_per_group"):
         value = getattr(args, name)
         if value is not None and value < 1:
@@ -671,7 +673,7 @@ def generation_jobs(path, mode, forget_file, args):
 
 def evaluate_generation(backend, path, mode, forget_file, args):
     jobs = generation_jobs(path, mode, forget_file, args)
-    answers = backend.generate(jobs, args.max_new_tokens)
+    answers = backend.generate(jobs, args.max_generation_tokens)
     scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     metric_names = ("rouge1", "rouge2", "rougeL", "bleu")
     sums = {kind: {name: 0.0 for name in metric_names} for kind in ("Image_Textual", "Pure_Text")}
