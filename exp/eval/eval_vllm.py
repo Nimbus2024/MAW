@@ -464,6 +464,8 @@ def evaluate_classification(backend, path, mode, forget_file, args):
             "question type": kind,
             "qid": job.metadata["qid"],
             "correct": bool(ok),
+            "question": job.question,
+            "options": job.metadata["options"],
             "generated_answer": answer,
             "correct_answer": str(job.metadata["correct"]),
         })
@@ -525,6 +527,7 @@ def evaluate_fill(backend, path, mode, forget_file, args):
             "question type": kind,
             "qid": job.metadata["qid"],
             "correct": bool(ok),
+            "question": job.question,
             "generated_answer": answer,
             "ground_truth": job.metadata["ground_truth"],
         })
@@ -613,6 +616,7 @@ def evaluate_qa(backend, path, mode, forget_file, args):
             "question type": kind,
             "qid": job.metadata["qid"],
             "correct": bool(ok),
+            "question": job.question,
             "generated_answer": answer,
             "ground_truth": job.metadata["ground_truth"],
         })
