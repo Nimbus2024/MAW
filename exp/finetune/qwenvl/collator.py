@@ -53,3 +53,50 @@ class DataCollatorForSupervisedDataset:
                 dim=0,
             )
         return batch
+
+
+class HardNegativeCollator:
+    def __init__(self, tokenizer, include_position_ids: bool = True):
+        self.tokenizer = tokenizer
+        self.include_position_ids = include_position_ids
+
+    def __call__(self, instances):
+        candidates = []
+        counts = []
+        for instance in instances:
+            group = instance["candidates"]
+            counts.append(len(group))
+            candidates.extend(group)
+
+        input_ids = [candidate["input_ids"].squeeze(0) for candidate in candidates]
+        labels = [candidate["labels"].squeeze(0) for candidate in candidates]
+
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
+        )
+        labels = torch.nn.utils.rnn.pad_sequence(
+            labels, batch_first=True, padding_value=-100
+        )
+
+        max_length = self.tokenizer.model_max_length
+        input_ids = input_ids[:, :max_length]
+        labels = labels[:, :max_length]
+
+        batch = {
+            "input_ids": input_ids,
+            "labels": labels,
+            "attention_mask": input_ids.ne(self.tokenizer.pad_token_id),
+            "candidate_counts": torch.tensor(counts, dtype=torch.long),
+        }
+        if self.include_position_ids:
+            position_ids = _pad_position_ids([candidate["position_ids"] for candidate in candidates])
+            batch["position_ids"] = position_ids[:, :, :max_length]
+
+        images = [candidate["pixel_values"] for candidate in candidates if "pixel_values" in candidate]
+        if images:
+            batch["pixel_values"] = torch.cat(images, dim=0)
+            batch["image_grid_thw"] = torch.cat(
+                [candidate["image_grid_thw"] for candidate in candidates if "image_grid_thw" in candidate],
+                dim=0,
+            )
+        return batch

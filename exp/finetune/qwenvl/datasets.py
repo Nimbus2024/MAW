@@ -7,6 +7,7 @@ qwenvl.processor, with 3D mRoPE position ids from qwenvl.rope2d.
 import ast
 import math
 import random
+import re
 from io import BytesIO
 from typing import Any
 
@@ -47,6 +48,16 @@ def iter_qa(value):
         return
     for key in questions:
         yield json2token(questions[key]), json2token(answers.get(key, ""))
+
+
+def iter_qa_with_keys(value):
+    data = _as_mapping(value)
+    questions = data.get("question", {}) or {}
+    answers = data.get("answer", {}) or {}
+    if not isinstance(questions, dict):
+        return
+    for key in questions:
+        yield str(key), json2token(questions[key]), json2token(answers.get(key, ""))
 
 
 def _decode_image(row) -> Image.Image:
@@ -112,6 +123,140 @@ class UmuQwenDataset(Dataset):
         if "image_grid_thw" in data:
             item["image_grid_thw"] = data["image_grid_thw"]
         return item
+
+
+def _norm_value(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value).lower()).split())
+
+
+class UmuHardNegativeDataset(Dataset):
+    def __init__(
+        self,
+        parquet_path,
+        processor,
+        modalities: str = "mm_um",
+        max_samples=None,
+        hard_neg_k: int = 4,
+        exclude_keys=("Name", "Description"),
+        seed: int = 42,
+    ):
+        self.processor = processor
+        self.merge_size = getattr(processor.image_processor, "merge_size", 2)
+        self.hard_neg_k = hard_neg_k
+        self.seed = seed
+        df = pd.read_parquet(parquet_path).reset_index(drop=True)
+
+        exclude_keys = {str(key) for key in exclude_keys}
+        values_by_key = {}
+        for row_idx, row in df.iterrows():
+            pid = str(row.get("ID"))
+            answers = {}
+            for column in ("UM_QA", "MM_QA"):
+                for key, _, answer in iter_qa_with_keys(row.get(column)):
+                    answers.setdefault(key, answer)
+            for key, answer in answers.items():
+                if key in exclude_keys or not str(answer).strip():
+                    continue
+                values_by_key.setdefault(key, []).append((pid, answer))
+
+        items = []
+        for row_idx, row in df.iterrows():
+            for column, kind in (("MM_QA", "Image_Textual"), ("UM_QA", "Pure_Text")):
+                if kind == "Image_Textual" and "mm" not in modalities:
+                    continue
+                if kind == "Pure_Text" and "um" not in modalities:
+                    continue
+                for key, question, answer in iter_qa_with_keys(row.get(column)):
+                    if key in exclude_keys:
+                        continue
+                    negatives = self._sample_negatives(
+                        str(row.get("ID")),
+                        key,
+                        answer,
+                        values_by_key,
+                        row_idx,
+                    )
+                    if not negatives:
+                        continue
+                    items.append(
+                        {
+                            "row_idx": row_idx,
+                            "id": str(row.get("ID")),
+                            "key": key,
+                            "question": question,
+                            "answer": answer,
+                            "negatives": negatives,
+                            "type": kind,
+                        }
+                    )
+        if max_samples is not None:
+            random.Random(seed).shuffle(items)
+            items = items[:max_samples]
+
+        images = {idx: _decode_image(df.iloc[idx]) for idx in {item["row_idx"] for item in items}}
+        self.samples = [
+            {
+                "id": item["id"],
+                "key": item["key"],
+                "image": images[item["row_idx"]] if item["type"] == "Image_Textual" else None,
+                "question": item["question"],
+                "answer": item["answer"],
+                "negatives": item["negatives"],
+                "type": item["type"],
+            }
+            for item in items
+        ]
+        print(
+            f"UmuHardNegativeDataset: {len(self.samples)} samples, "
+            f"k={self.hard_neg_k}, modalities={modalities}"
+        )
+
+    def _sample_negatives(self, pid, key, answer, values_by_key, row_idx):
+        correct = _norm_value(answer)
+        pool = []
+        seen = set()
+        for other_id, value in values_by_key.get(key, []):
+            if other_id == pid:
+                continue
+            normalized = _norm_value(value)
+            if not normalized or normalized == correct or normalized in seen:
+                continue
+            seen.add(normalized)
+            pool.append(value)
+        if not pool:
+            return []
+        rng = random.Random(self.seed + row_idx + sum(ord(ch) for ch in key))
+        if len(pool) <= self.hard_neg_k:
+            return pool
+        return rng.sample(pool, self.hard_neg_k)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        candidates = []
+        for answer in [sample["answer"]] + sample["negatives"]:
+            messages = build_messages(sample["question"], answer, sample["image"])
+            data = preprocess_qwen_visual(messages, self.processor)
+            input_ids = data["input_ids"]
+            position_ids, _ = get_rope_index_3(
+                self.merge_size,
+                input_ids,
+                image_grid_thw=data.get("image_grid_thw"),
+                attention_mask=torch.ones_like(input_ids),
+            )
+            item = {
+                "input_ids": input_ids,
+                "labels": data["labels"],
+                "position_ids": position_ids,
+            }
+            if "pixel_values" in data:
+                item["pixel_values"] = data["pixel_values"]
+            if "image_grid_thw" in data:
+                item["image_grid_thw"] = data["image_grid_thw"]
+            candidates.append(item)
+        return {"candidates": candidates, "num_candidates": len(candidates)}
 
 
 def load_eval_samples(parquet_path, modality: str = "mm", limit=None, seed: int = 42):
