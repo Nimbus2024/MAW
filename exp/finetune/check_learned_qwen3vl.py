@@ -150,7 +150,7 @@ def parse_args():
     parser.add_argument("--n_train", type=int, default=200)
     parser.add_argument("--n_real", type=int, default=200)
     parser.add_argument("--n_real_tasks", type=int, default=200)
-    parser.add_argument("--max_new_tokens", type=int, default=128)
+    parser.add_argument("--max_new_tokens", type=int, default=160)
     parser.add_argument("--min_pixels", type=int, default=28 * 28 * 16)
     parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
     parser.add_argument(

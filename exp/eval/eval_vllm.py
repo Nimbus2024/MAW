@@ -13,6 +13,7 @@ import json
 import os
 import random
 import ast
+import difflib
 import tempfile
 from dataclasses import dataclass
 from io import BytesIO
@@ -58,8 +59,8 @@ def parse_args():
     parser.add_argument("--max_pixels", type=int, default=28 * 28 * 576)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--max_new_tokens", type=int, default=50)
-    parser.add_argument("--max_generation_tokens", type=int, default=128)
+    parser.add_argument("--max_new_tokens", type=int, default=32)
+    parser.add_argument("--max_generation_tokens", type=int, default=160)
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument(
         "--attn_implementation",
@@ -396,6 +397,14 @@ def row_image(row, mode, noise_sigma=0.0):
     return image
 
 
+def select_answer(response, options):
+    similarities = [
+        difflib.SequenceMatcher(None, str(response), str(option)).ratio()
+        for option in options
+    ]
+    return options[similarities.index(max(similarities))]
+
+
 def classification_jobs(path, mode, forget_file, args):
     jobs = []
     skipped = {"Image_Textual": 0, "Pure_Text": 0}
@@ -414,10 +423,17 @@ def classification_jobs(path, mode, forget_file, args):
                     skipped[question_type] += 1
                     print(f"Skipping invalid classification question for ID {row['ID']}: {exc}")
                     continue
+                ordered_options = [
+                    str(item["Options"][key])
+                    for key in ("A", "B", "C", "D")
+                    if key in item["Options"]
+                ]
+                if len(ordered_options) != len(options):
+                    ordered_options = options
                 jobs.append(Job(
-                    question=f"{item['Question']}\nSelect answer in {options}{args.prompt_suffix}",
+                    question=f"{item['Question']}\nSelect answer in {ordered_options}{args.prompt_suffix}",
                     image=image if question_type == "Image_Textual" else None,
-                    metadata={"type": question_type, "correct": correct, "options": options,
+                    metadata={"type": question_type, "correct": correct, "options": ordered_options,
                               "row": row_idx, "qid": qid, "image_id": row["ID"]},
                 ))
                 qid += 1
@@ -458,8 +474,8 @@ def evaluate_classification(backend, path, mode, forget_file, args):
     for job, answer in zip(jobs, answers):
         kind = job.metadata["type"]
         totals[kind] += 1
-        ok = benchmark.is_correct_fuzzy(
-            answer, job.metadata["options"], job.metadata["correct"])
+        selected = select_answer(answer, job.metadata["options"])
+        ok = selected == job.metadata["correct"]
         correct[kind] += int(ok)
         details["Classification_Questions"].append({
             "image_id": job.metadata["image_id"],
@@ -469,6 +485,7 @@ def evaluate_classification(backend, path, mode, forget_file, args):
             "question": job.question,
             "options": job.metadata["options"],
             "generated_answer": answer,
+            "selected_answer": selected,
             "correct_answer": str(job.metadata["correct"]),
         })
     if args.dump_details:
@@ -484,8 +501,7 @@ def evaluate_classification(backend, path, mode, forget_file, args):
     }
     pairs = _paired_correct(
         jobs, answers,
-        lambda job, ans: benchmark.is_correct_fuzzy(
-            ans, job.metadata["options"], job.metadata["correct"]))
+        lambda job, ans: select_answer(ans, job.metadata["options"]) == job.metadata["correct"])
     all_acc, all_err = _all_acc_err(pairs)
     if all_acc is not None:
         result["All Modal Question Accuracy"] = all_acc
@@ -500,17 +516,13 @@ def fill_jobs(path, mode, forget_file, args):
         per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Mask_Task"], args):
             kind = item["Type"]
-            prompt = item["Question"]
-            if "__" in prompt:
-                prompt = prompt.replace("__", "[Blank]")
-                prompt += "\nPlease **ONLY** provide the correct answer that should fill the [Blank]."
-            else:
-                prompt += "\nPlease **ONLY** provide the correct answer without any explanation."
+            prompt = item["Question"].replace("__", "[Blank]")
+            prompt += "\nPlease **ONLY** provide the correct answer without any explanation"
             prompt += args.prompt_suffix
             jobs.append(Job(
                 question=prompt,
                 image=image if kind == "Image_Textual" else None,
-                metadata={"type": kind, "ground_truth": item["Ground_Truth"],
+                metadata={"type": kind, "ground_truth": str(item["Ground_Truth"]).split('.')[0],
                           "row": row_idx, "qid": per_kind[kind], "image_id": row["ID"]},
             ))
             per_kind[kind] += 1
@@ -652,8 +664,9 @@ def generation_jobs(path, mode, forget_file, args):
         per_kind = {"Image_Textual": 0, "Pure_Text": 0}
         for item in questions(row["Generation_Task"], args):
             kind = item["Type"]
+            instruction = "accurately in ENGLISH." if kind == "Image_Textual" else "in ENGLISH."
             prompt = item["Question"]
-            prompt += "\nAnswer the question based on your trained knowledge in one sentence accurately in ENGLISH."
+            prompt += "\nAnswer the question based on your trained knowledge in one sentence " + instruction
             prompt += args.prompt_suffix
             jobs.append(Job(
                 question=prompt,
@@ -673,14 +686,15 @@ def generation_jobs(path, mode, forget_file, args):
 
 def evaluate_generation(backend, path, mode, forget_file, args):
     jobs = generation_jobs(path, mode, forget_file, args)
-    answers = backend.generate(jobs, args.max_generation_tokens)
+    raw_answers = backend.generate(jobs, args.max_generation_tokens)
+    answers = [answer.split('.')[0] for answer in raw_answers]
     scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     metric_names = ("rouge1", "rouge2", "rougeL", "bleu")
     sums = {kind: {name: 0.0 for name in metric_names} for kind in ("Image_Textual", "Pure_Text")}
     counts = {"Image_Textual": 0, "Pure_Text": 0}
     rows_rouge = {}
     details = {"Generation_Questions": []}
-    for job, answer in zip(jobs, answers):
+    for job, answer, raw_answer in zip(jobs, answers, raw_answers):
         kind = job.metadata["type"]
         truth = str(job.metadata["ground_truth"])
         scores = scorer.score(truth, answer)
@@ -697,6 +711,7 @@ def evaluate_generation(backend, path, mode, forget_file, args):
             "qid": job.metadata["qid"],
             "question": job.metadata["question"],
             "generated_answer": answer,
+            "raw_answer": raw_answer,
             "ground_truth": truth,
             "rougeL": scores["rougeL"].fmeasure,
         })
